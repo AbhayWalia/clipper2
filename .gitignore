@@ -1,0 +1,11 @@
+# Video files are too big for GitHub
+*.mp4
+*.mov
+*.mkv
+
+# Python
+__pycache__/
+*.pyc
+
+# Secrets
+.env
