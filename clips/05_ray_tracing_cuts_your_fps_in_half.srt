@@ -1,0 +1,71 @@
+1
+00:00:00,000 --> 00:00:01,500
+So I got you guys.
+
+2
+00:00:01,500 --> 00:00:04,620
+We're now going to enable ray tracing, OK?
+
+3
+00:00:04,660 --> 00:00:06,660
+Let's put it on high.
+
+4
+00:00:06,660 --> 00:00:07,780
+Let's see what we can work with.
+
+5
+00:00:07,780 --> 00:00:09,660
+All right, let's see what we can work with.
+
+6
+00:00:09,660 --> 00:00:14,280
+OK, this is for you guys.
+
+7
+00:00:14,280 --> 00:00:16,200
+All right, 50s.
+
+8
+00:00:16,760 --> 00:00:19,760
+Whoo, instantly in the 60s.
+
+9
+00:00:20,960 --> 00:00:24,320
+Wow, so we're still getting about 60 FPS with GTA.
+
+10
+00:00:25,440 --> 00:00:26,840
+With ray tracing turned on.
+
+11
+00:00:26,840 --> 00:00:29,320
+But as you guys can see, man, ray tracing is just.
+
+12
+00:00:30,480 --> 00:00:32,640
+It's just it's dominant.
+
+13
+00:00:33,360 --> 00:00:36,280
+It's definitely super strong.
+
+14
+00:00:36,280 --> 00:00:38,480
+I probably wouldn't even recommend it.
+
+15
+00:00:38,480 --> 00:00:39,480
+Not even worth it.
+
+16
+00:00:39,480 --> 00:00:40,600
+Well, like, you know, what's the point?
+
+17
+00:00:40,600 --> 00:00:44,120
+What's the point of having ray tracing on
+
+18
+00:00:44,120 --> 00:00:50,500
+if it's going to cut your FPS almost in half?

@@ -1,0 +1,35 @@
+1
+00:00:01,500 --> 00:00:04,140
+And we're instantly in the hundreds.
+
+2
+00:00:04,140 --> 00:00:05,300
+Wait, is FSR back on?
+
+3
+00:00:05,300 --> 00:00:06,700
+Or no, just making sure.
+
+4
+00:00:06,700 --> 00:00:09,300
+Let me just make sure because we are getting some pretty good frames.
+
+5
+00:00:09,300 --> 00:00:12,140
+And no, no frame gen on, really good.
+
+6
+00:00:16,410 --> 00:00:18,810
+And we're sticking to about 120 frames.
+
+7
+00:00:19,290 --> 00:00:21,130
+So we're definitely in the hundreds now.
+
+8
+00:00:22,210 --> 00:00:26,410
+So if you guys want a game and the hundreds you guys can,
+
+9
+00:00:26,410 --> 00:00:29,450
+all you guys have to do is put the game, the 1080p,
