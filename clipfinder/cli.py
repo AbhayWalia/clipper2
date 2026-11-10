@@ -170,7 +170,11 @@ def find_clips(args, segs, vlen):
 
     template = args.prompt_file.read_text(encoding="utf-8") if args.prompt_file else llm.SYSTEM_PROMPT
     refusal_model = None if (args.refusal_model or "").lower() in ("", "none") else args.refusal_model
-    system = llm.render_prompt(template, args.min_len, args.max_len)
+    # Tell Claude the content limits clean_clips will enforce: the cut adds padding, so
+    # a clip that uses the full --max-len would otherwise lose its ending.
+    from .clips import content_limits
+    lo, hi = content_limits(args.min_len, args.max_len, args.pad_before + args.pad_after)
+    system = llm.render_prompt(template, lo, hi)
     examples = ""
     if args.examples > 0:
         examples = fb.examples_prompt(fb.load_library(args.library), args.examples,

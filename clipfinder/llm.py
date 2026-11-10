@@ -41,7 +41,8 @@ heists going wrong, getting "wasted" or "busted" at the worst moment.
 Rules for each clip:
 - It must make sense on its own, with a brief setup and a payoff. Start a few \
 seconds before the action begins; end right after the payoff/reaction lands.
-- Usually 15 to 60 seconds; never under {min_len}s or over {max_len}s.
+- Usually 15 to 60 seconds; never under {min_len}s or over {max_len}s (a little \
+padding is added around each clip afterwards, so these limits are for start to end).
 - Use the transcript's own timestamps for start and end.
 - Clips must not overlap each other.
 - Score honestly from 1 to 10 for viral potential. Skip dull stretches entirely; \

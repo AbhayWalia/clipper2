@@ -61,6 +61,14 @@ def snap_to_segments(clip: Clip, segs: list[Segment],
     return clip
 
 
+def content_limits(min_len: float, max_len: float, pad: float) -> tuple[float, float]:
+    """(shortest, longest) clip *content* in seconds. --min-len/--max-len apply to the
+    final cut, which adds `pad` seconds (before + after), so the content must leave room
+    for it. One place for this rule: the prompt and clean_clips both use it."""
+    lo = max(min_len - pad, 1.0)
+    return lo, max(max_len - pad, lo)
+
+
 def clean_clips(clips: list[Clip], segs: list[Segment], min_len: float,
                 max_len: float, min_score: float, top: int,
                 video_len: float | None, pad: float = 0.0) -> list[Clip]:
@@ -70,8 +78,7 @@ def clean_clips(clips: list[Clip], segs: list[Segment], min_len: float,
     apply to the final padded clip, so the content is held to
     [min_len - pad, max_len - pad].
     """
-    lo = max(min_len - pad, 1.0)
-    hi = max(max_len - pad, lo)
+    lo, hi = content_limits(min_len, max_len, pad)
     out = []
     for c in clips:
         if c.end <= c.start:
