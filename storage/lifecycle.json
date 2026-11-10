@@ -1,0 +1,18 @@
+{
+  "Rules": [
+    {
+      "ID": "vods-1-day",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "vods/"},
+      "Expiration": {"Days": 1},
+      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}
+    },
+    {
+      "ID": "clips-30-days",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "clips/"},
+      "Expiration": {"Days": 30},
+      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}
+    }
+  ]
+}
