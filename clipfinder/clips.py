@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -35,6 +36,30 @@ class Clip:
         kw = {k: d[k] for k in cls.REQUIRED}
         kw.update({k: d[k] for k in ("id", "text", "features", "predicted") if k in d})
         return cls(**kw)
+
+
+def source_fingerprint(video: Path, sample: int = 1 << 20) -> str:
+    """Short, stable fingerprint of a video's contents: its size plus its first and
+    last megabyte. Fast even for multi-GB VODs, unchanged if the file is moved or
+    renamed, and different for two VODs that happen to share a filename."""
+    h = hashlib.sha1()
+    try:
+        size = video.stat().st_size
+        h.update(str(size).encode())
+        with open(video, "rb") as f:
+            h.update(f.read(sample))
+            if size > sample:
+                f.seek(max(size - sample, sample))
+                h.update(f.read(sample))
+    except OSError:
+        h.update(str(video.resolve()).encode())
+    return h.hexdigest()[:8]
+
+
+def clip_id(video: Path, start: float, fingerprint: str | None = None) -> str:
+    """e.g. 'stream-3fa94c1e@612.4'. The fingerprint keeps clips from different VODs
+    with the same filename apart in the feedback library."""
+    return f"{video.stem}-{fingerprint or source_fingerprint(video)}@{start:.1f}"
 
 
 SNAP_OUT = 3.0  # an edge may move outward this far (more setup / more payoff)

@@ -13,7 +13,8 @@ from pathlib import Path
 from . import feedback as fb
 from . import llm
 from .captions import CaptionStyle, build_ass
-from .clips import clean_clips, load_manifest, save_manifest, update_manifest
+from .clips import (clean_clips, clip_id, load_manifest, save_manifest, source_fingerprint,
+                    update_manifest)
 from .layout import DEFAULT_LAYOUTS, Layout, grab_frame, load_layouts, parse_box, save_layout
 from .render import (SEGMENT_PAD, VERTICAL_SIZE, choose_mode, cut_clip, fmt_srt_time,
                      keyframe_before, pick_encoder, save_segments, segment_for, segment_windows,
@@ -220,8 +221,9 @@ def find_clips(args, segs, vlen):
     # With a re-ranker, keep every good non-overlapping candidate and let it pick the top N.
     clips = clean_clips(raw, segs, args.min_len, args.max_len, args.min_score,
                         0 if ranker else args.top, vlen, pad)
+    fingerprint = source_fingerprint(args.video)
     for c in clips:
-        c.id = f"{args.video.stem}@{c.start:.1f}"
+        c.id = clip_id(args.video, c.start, fingerprint)
         c.text = fb.clip_text(c, segs)
         c.features = fb.clip_features(c, segs, signals)
     if ranker:
