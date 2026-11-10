@@ -76,6 +76,13 @@ def clip_features(clip: Clip, segs: list[Segment], signals=None, pad: float = DE
     return f
 
 
+def posted_length(clip: Clip) -> float:
+    """Seconds in the posted video. Clips picked before this was recorded get the
+    default padding added to their content length."""
+    recorded = (clip.features or {}).get("posted_length")
+    return round(float(recorded) if recorded else clip.duration + DEFAULT_PAD, 1)
+
+
 FEATURES = ["claude_score", "duration", "hook_chars", "words_per_sec", "speech_fraction",
             "audio_peak_db", "audio_spikes", "chat_peak_ratio", "chat_bursts"] + \
            [f"cat_{c}" for c in CATEGORIES]
@@ -95,13 +102,6 @@ def save_library(path: Path, lib: dict) -> None:
     path.write_text(json.dumps(lib, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def posted_length(clip: Clip) -> float:
-    """Seconds in the posted video. Clips picked before this was recorded get the
-    default padding added to their content length."""
-    recorded = (clip.features or {}).get("posted_length")
-    return round(float(recorded) if recorded else clip.duration + DEFAULT_PAD, 1)
-
-
 def record_post(lib: dict, clip: Clip, *, streamer: str | None, video: str | None,
                 platform: str, url: str = "", views: int | None = None,
                 avg_watch: float | None = None, shares: int | None = None,
@@ -115,8 +115,7 @@ def record_post(lib: dict, clip: Clip, *, streamer: str | None, video: str | Non
     entry.update({
         "id": clip.id, "streamer": streamer or "", "video": video or "",
         "title": clip.title, "hook": clip.hook, "category": clip.category,
-        # Length of the posted video (content + padding), so retention = watch / length.
-        "duration": posted_length(clip), "claude_score": clip.score,
+        "duration": posted_length(clip), "claude_score": clip.score,  # posted video length
         "text": clip.text, "features": clip.features or entry.get("features", {}),
     })
     post = entry.setdefault("posts", {}).setdefault(platform, {})
