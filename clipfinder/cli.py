@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import feedback as fb
@@ -461,14 +460,18 @@ def main(argv=None) -> None:
                       hook_seconds=args.hook_seconds)
         jobs.append((src, base.with_suffix(".mp4"), start - offset, end - offset, mode,
                      args.vertical, ass, encoder, layout))
-    with ThreadPoolExecutor(max_workers=max(args.jobs, 1)) as pool:
-        futures = {pool.submit(cut_clip, *job): job[1].name for job in jobs}
-        for done in as_completed(futures):
-            done.result()
-            print(f"  saved {futures[done]}")
+    from .render import run_cut_jobs
+    saved, failed = run_cut_jobs(jobs, args.jobs)
 
     recipe = args.clips_json or args.out / "clips.json"
-    print(f"\nDone. {len(clips)} clips in {dest}/ (details in {recipe})")
+    if failed:
+        print(f"\nDone with errors: {len(saved)} of {len(jobs)} clips saved in {dest}/, "
+              f"{len(failed)} failed (details in {recipe}):")
+        for name, reason in sorted(failed):
+            print(f"  - {name}: {reason}")
+        print("Fix the cause above and re-run; the saved clips are fine.")
+    else:
+        print(f"\nDone. {len(clips)} clips in {dest}/ (details in {recipe})")
     if mode == "preview":
         print(f"Review the previews, delete the clips you don't want from clips.json, then render\n"
               f"the keepers at full quality:  python clipper.py --clips-json {recipe}"
@@ -476,6 +479,8 @@ def main(argv=None) -> None:
               f"{' --vertical' if args.vertical and not layout else ''}"
               f"{' --burn-captions' if args.burn_captions else ''}"
               f"{' --hook-overlay' if args.hook_overlay else ''}")
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
