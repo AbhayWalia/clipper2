@@ -88,10 +88,13 @@ def slugify(text: str, n: int = 40) -> str:
 
 
 def fmt_srt_time(t: float) -> str:
-    t = max(t, 0)
-    h, rem = divmod(t, 3600)
-    m, s = divmod(rem, 60)
-    return f"{int(h):02d}:{int(m):02d}:{int(s):02d},{int(round((s % 1) * 1000)) % 1000:03d}"
+    # Round to whole milliseconds first, then split, so 59.9996 carries to 00:01:00,000
+    # instead of wrapping the milliseconds and jumping back to 00:00:59,000.
+    ms = int(round(max(t, 0) * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def write_clip_srt(path: Path, segs: list[Segment], t0: float, t1: float) -> None:
