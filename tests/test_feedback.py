@@ -52,7 +52,7 @@ def test_record_post_merges_platforms():
     t = fb.totals(lib[c.id])
     assert t["views"] == 5000 and t["shares"] == 7
     assert t["avg_watch"] == pytest.approx((15 * 2000 + 25 * 3000) / 5000)
-    assert t["retention"] == pytest.approx(t["avg_watch"] / 30)
+    assert t["retention"] == pytest.approx(t["avg_watch"] / (30 + fb.DEFAULT_PAD))  # posted length
     with pytest.raises(ValueError):
         fb.record_post(lib, clip(id=""), streamer="a", video="v", platform="tiktok", views=1)
 
@@ -168,3 +168,28 @@ def test_feedback_cli_end_to_end(tmp_path, capsys):
     fb_main(["--library", str(lib), "train", "--out", str(ranker)])
     assert "will use it" in capsys.readouterr().out
     assert fb.load_ranker(ranker)["enabled"]
+
+
+def test_retention_uses_posted_length_with_padding():
+    # A 12 s clip is posted as 15 s (1.5 s padding each side). Watching 12 s on
+    # average is 80% retention, not the 100% the content length gave.
+    segs = [Segment(10, 22, "words")]
+    c = clip(1, start=10, end=22, features=None)
+    c.features = fb.clip_features(c, segs, pad=3.0)
+    assert c.features["posted_length"] == 15.0
+    assert "posted_length" not in fb.FEATURES          # bookkeeping, not a ranker input
+    lib = {}
+    e = fb.record_post(lib, c, streamer="a", video="v", platform="tiktok", views=100, avg_watch=12)
+    assert e["duration"] == 15.0
+    assert fb.totals(e)["retention"] == pytest.approx(0.8)
+
+
+def test_retention_for_old_clips_assumes_default_padding():
+    old = clip(1, start=10, end=22, features={"claude_score": 8})   # no posted_length
+    e = fb.record_post({}, old, streamer="a", video="v", platform="tiktok", views=1, avg_watch=12)
+    assert e["duration"] == 12 + fb.DEFAULT_PAD
+
+
+def test_custom_padding_is_recorded():
+    c = clip(1, start=0, end=20)
+    assert fb.clip_features(c, [], pad=5.0)["posted_length"] == 25.0
