@@ -138,7 +138,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     keep.add_argument("--from-segments", action="store_true",
                       help="With --clips-json, render from the saved segments even if the VOD exists "
                            "(automatic when it doesn't)")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.window <= 0 or not 0 <= args.overlap < args.window:
+        p.error(f"--overlap ({args.overlap:g}) must be at least 0 and smaller than "
+                f"--window ({args.window:g}).")
+    return args
 
 
 def build_signals(args, segs) -> Signals | None:
