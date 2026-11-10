@@ -198,9 +198,26 @@ class Signals:
         inside = [e for e in self.events if e.end > t0 and e.start < t1]
         if not inside:
             return ""
-        # Keep the strongest of each kind if there are too many, then show in time order.
-        inside.sort(key=lambda e: e.strength, reverse=True)
-        keep = sorted(inside[:self.per_range], key=lambda e: e.start)
+        # Audio strength is dB and chat strength is a rate multiple, so they can't be
+        # ranked against each other. Give each kind an equal share of the slots (unused
+        # share goes to the other kind), keep the strongest within each kind, then show
+        # everything in time order.
+        by_kind: dict[str, list[Event]] = {}
+        for e in sorted(inside, key=lambda e: e.strength, reverse=True):
+            by_kind.setdefault(e.kind, []).append(e)
+        keep: list[Event] = []
+        quota = max(self.per_range // len(by_kind), 1)
+        for events in by_kind.values():
+            keep += events[:quota]
+        leftovers = [e for events in by_kind.values() for e in events[quota:]]
+        # Fill any free slots kind by kind, strongest first within each kind.
+        while len(keep) < self.per_range and leftovers:
+            for kind in list(by_kind):
+                nxt = next((e for e in leftovers if e.kind == kind), None)
+                if nxt is not None and len(keep) < self.per_range:
+                    keep.append(nxt)
+                    leftovers.remove(nxt)
+        keep.sort(key=lambda e: e.start)
         return "\n".join(describe(e, self.segs) for e in keep)
 
 
