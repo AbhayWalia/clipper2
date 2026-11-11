@@ -394,8 +394,15 @@ def main(argv=None) -> None:
               f"({c.duration:.0f}s) {c.title}")
 
     if args.dry_run:
-        print(f"\nDry run: clip list saved to {args.out/'clips.json'}. "
-              f"Cut later with --clips-json {args.out/'clips.json'}")
+        if args.clips_json:  # nothing new was written; point at the file that exists
+            print(f"\nDry run: nothing was cut or written. The clip list is {args.clips_json}; "
+                  f"cut later with --clips-json {args.clips_json}")
+        else:
+            print(f"\nDry run: clip list saved to {args.out/'clips.json'}. "
+                  f"Cut later with --clips-json {args.out/'clips.json'}")
+        if args.save_segments:
+            print("--save-segments was skipped because this is a dry run; "
+                  "run again without --dry-run to save the segments.")
         return
 
     if args.save_segments:
