@@ -90,6 +90,23 @@ def save_library(path: Path, lib: dict) -> None:
     path.write_text(json.dumps(lib, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _same_clip(entry: dict, clip: Clip, video: str | None) -> bool:
+    if video and entry.get("video") == video:
+        return True
+    return entry.get("text") == clip.text and entry.get("title") == clip.title
+
+
+def library_key(lib: dict, clip: Clip, video: str | None) -> str:
+    """The library key for this clip: its id, unless that id already belongs to a
+    *different* clip (older clips.json files built ids from the filename alone, so two
+    VODs called stream.mp4 could collide), in which case 'id#2', 'id#3', ..."""
+    key, n = clip.id, 1
+    while key in lib and not _same_clip(lib[key], clip, video):
+        n += 1
+        key = f"{clip.id}#{n}"
+    return key
+
+
 def record_post(lib: dict, clip: Clip, *, streamer: str | None, video: str | None,
                 platform: str, url: str = "", views: int | None = None,
                 avg_watch: float | None = None, shares: int | None = None,
@@ -99,9 +116,10 @@ def record_post(lib: dict, clip: Clip, *, streamer: str | None, video: str | Non
     they grow (re-run with the new numbers)."""
     if not clip.id:
         raise ValueError("This clip has no id; re-run the clip finder so clips.json gets ids.")
-    entry = lib.setdefault(clip.id, {})
+    key = library_key(lib, clip, video)
+    entry = lib.setdefault(key, {})
     entry.update({
-        "id": clip.id, "streamer": streamer or "", "video": video or "",
+        "id": key, "streamer": streamer or "", "video": video or "",
         "title": clip.title, "hook": clip.hook, "category": clip.category,
         "duration": round(clip.duration, 1), "claude_score": clip.score,
         "text": clip.text, "features": clip.features or entry.get("features", {}),
