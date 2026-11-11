@@ -26,20 +26,26 @@ def _num(v, cast=float):
 
 
 def find_clip(clips: list[Clip], which: str) -> Clip:
+    """Clip by number (from 1) or id. Raises LookupError so callers decide whether
+    a miss ends the command (record) or just skips one row (import)."""
     if which.isdigit():
         i = int(which)
         if not 1 <= i <= len(clips):
-            sys.exit(f"Clip {i} doesn't exist; this clips.json has {len(clips)} (numbered from 1).")
+            raise LookupError(f"Clip {i} doesn't exist; this clips.json has {len(clips)} "
+                              f"(numbered from 1).")
         return clips[i - 1]
     for c in clips:
         if c.id == which:
             return c
-    sys.exit(f"No clip with id {which!r} in that clips.json.")
+    raise LookupError(f"No clip with id {which!r} in that clips.json.")
 
 
 def cmd_record(a) -> None:
     meta, clips = load_manifest(a.clips_json)
-    clip = find_clip(clips, a.clip)
+    try:
+        clip = find_clip(clips, a.clip)
+    except LookupError as e:
+        sys.exit(str(e))
     lib = fb.load_library(a.library)
     e = fb.record_post(lib, clip, streamer=meta.get("streamer"), video=meta.get("video"),
                        platform=a.platform, url=a.url, views=a.views, avg_watch=a.avg_watch,
@@ -65,7 +71,12 @@ def cmd_import(a) -> None:
                     skipped += 1
                     continue
                 meta, clips = manifests[0]
-                clip = find_clip(clips, which)
+                try:
+                    clip = find_clip(clips, which)
+                except LookupError as e:
+                    print(f"  line {n}: {e} Skipped.")
+                    skipped += 1
+                    continue
             elif which in by_id:
                 clip, meta = by_id[which]
             elif which in lib:  # already known: just update the numbers
@@ -78,12 +89,18 @@ def cmd_import(a) -> None:
                 print(f"  line {n}: unknown clip {which!r}; skipped")
                 skipped += 1
                 continue
+            try:
+                stats = dict(views=_num(row.get("views"), int),
+                             avg_watch=_num(row.get("avg_watch") or row.get("average_watch_time")),
+                             shares=_num(row.get("shares"), int), likes=_num(row.get("likes"), int),
+                             comments=_num(row.get("comments"), int))
+            except ValueError as e:
+                print(f"  line {n}: a number couldn't be read ({e}). Skipped.")
+                skipped += 1
+                continue
             fb.record_post(lib, clip, streamer=meta.get("streamer"), video=meta.get("video"),
                            platform=row.get("platform") or a.platform, url=row.get("url", ""),
-                           views=_num(row.get("views"), int),
-                           avg_watch=_num(row.get("avg_watch") or row.get("average_watch_time")),
-                           shares=_num(row.get("shares"), int), likes=_num(row.get("likes"), int),
-                           comments=_num(row.get("comments"), int))
+                           **stats)
             done += 1
     fb.save_library(a.library, lib)
     print(f"Imported {done} row(s), skipped {skipped}. "
