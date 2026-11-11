@@ -189,6 +189,28 @@ def cut_clip(video: Path, out: Path, start: float, end: float, mode: str,
         cut_clip(video, out, start, end, mode, vertical, ass, "libx264", layout)
 
 
+def run_cut_jobs(jobs: list[tuple], workers: int = 4, cut=None) -> tuple[list[str], list[tuple[str, str]]]:
+    """Cut every clip, `workers` at a time. One failure doesn't stop the others:
+    returns (saved file names, [(failed file name, reason), ...])."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    cut = cut or cut_clip
+    saved: list[str] = []
+    failed: list[tuple[str, str]] = []
+    with ThreadPoolExecutor(max_workers=max(workers, 1)) as pool:
+        futures = {pool.submit(cut, *job): Path(job[1]).name for job in jobs}
+        for done in as_completed(futures):
+            name = futures[done]
+            try:
+                done.result()
+            except Exception as e:  # ffmpeg error, missing file, bad crop box, ...
+                failed.append((name, str(e) or type(e).__name__))
+                print(f"  FAILED {name}: {e}")
+            else:
+                saved.append(name)
+                print(f"  saved {name}")
+    return saved, failed
+
+
 # --------------------------------------------------------------------------- #
 # Clip segments: keep the footage around each clip instead of the whole VOD.
 # --------------------------------------------------------------------------- #
