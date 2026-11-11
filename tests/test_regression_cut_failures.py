@@ -46,3 +46,36 @@ def test_cli_reports_failed_clips_and_exits_nonzero(tmp_path, monkeypatch, capsy
     out = capsys.readouterr().out
     assert e.value.code == 1
     assert "2 of 3 clips saved" in out and "02_clip_1.mp4: bad crop box" in out
+
+
+@pytest.mark.parametrize("fail", [True, False])
+def test_upload_only_when_every_clip_was_cut(tmp_path, monkeypatch, capsys, fail):
+    # A half-finished run must not reach the bucket; a clean one is uploaded.
+    import json
+    import clipfinder.cli as cli
+    import clipfinder.render as render
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    manifest = tmp_path / "clips.json"
+    manifest.write_text(json.dumps({"video": str(video), "clips": [
+        {"start": i * 20.0, "end": i * 20.0 + 10, "score": 8, "title": f"clip {i}", "hook": "h",
+         "category": "funny", "reason": "r"} for i in range(2)]}))
+
+    def fake_cut(video, out, *rest):
+        if fail and "clip_1" in out.name:
+            raise RuntimeError("bad crop box")
+    real = render.run_cut_jobs
+    monkeypatch.setattr(render, "run_cut_jobs", lambda jobs, workers: real(jobs, workers, cut=fake_cut))
+    monkeypatch.setattr(cli, "keyframe_before", lambda video, t: t, raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/" + name)
+    uploads = []
+    monkeypatch.setattr(cli, "upload_run", lambda *a: uploads.append(a))
+    argv = ["--clips-json", str(manifest), "--out", str(tmp_path / "out"), "--upload"]
+    if fail:
+        with pytest.raises(SystemExit) as e:
+            cli.main(argv)
+        assert e.value.code == 1 and uploads == []
+        assert "Not uploaded" in capsys.readouterr().out
+    else:
+        cli.main(argv)
+        assert len(uploads) == 1

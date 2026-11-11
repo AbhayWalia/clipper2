@@ -163,6 +163,9 @@ In the output folder:
 | `--keep-audio` | off | Keep the 16 kHz audio extracted for Whisper |
 | `--save-segments` / `--segment-pad` | off / 30 | Keep the footage around each clip in `segments/` so the VOD can be deleted |
 | `--from-segments` | off | Re-render from saved segments even if the VOD still exists (automatic when it's gone) |
+| `--upload` / `--upload-vod` | off | Upload the run to S3 or R2 (`clips/`, `recipes/`; `vods/` too). See *Running it as a service* |
+| `--fetch STREAM` | none | Download a stream's run from the bucket into `clips/STREAM/` to re-render it |
+| `--stream` / `--links` | file name / off | Name in the bucket; print 7-day download links after `--upload` |
 | `--streamer` / `--layouts` | none / layouts.json | Use a saved facecam layout (see above) |
 | `--burn-captions` | off | Word-by-word captions; the spoken word lights up |
 | `--caption-style` | animated | `plain` shows phrases without the highlight |
@@ -243,23 +246,56 @@ re-editable for 30 days while storing about a tenth of the VOD:
    on S3, download fees cost more than the storage itself. Avoid infrequent-access and archive
    tiers (S3 Standard-IA, R2 Infrequent Access, Glacier, Wasabi): their 30–90 day minimums and
    per-read fees cost more than they save on files kept 30 days and downloaded.
-4. **Lay out the bucket by retention** and apply [storage/lifecycle.json](storage/lifecycle.json):
+4. **Upload with `--upload`.** It lays the bucket out by how long things are kept, and
+   [storage/lifecycle.json](storage/lifecycle.json) deletes them on schedule:
 
    | Prefix | What goes there | Deleted after |
    |---|---|---|
-   | `vods/` | source videos | 1 day |
-   | `clips/<stream>/` | the whole output folder: clips, `.srt`, `previews/`, `segments/`, `clips.json` | 30 days |
+   | `vods/<stream>.mp4` | source video (only with `--upload-vod`) | 1 day |
+   | `clips/<stream>/` | this run's clips, `.srt`, `previews/`, `segments/`, `clips.json` | 30 days |
    | `recipes/<stream>/` | a copy of `clips.json` and the transcript (about 50 KB) | never |
 
+### Setting up R2 (or S3)
+
+1. **R2:** in the Cloudflare dashboard, turn on R2, create a bucket, and under *Manage API
+   tokens* create a token with *Object Read & Write* for that bucket.
+   **S3:** create a bucket and an IAM user allowed `s3:GetObject`, `PutObject`, `DeleteObject`
+   and `ListBucket` on it.
+2. `pip install 'boto3>=1.36'`, then put the settings in a `.env` file (found in the current
+   folder or any parent; it's git-ignored) or export them:
+
+   ```
+   CLIPPER_BUCKET=clipper
+   CLIPPER_S3_ENDPOINT=https://ACCOUNT_ID.r2.cloudflarestorage.com   # leave out for AWS S3
+   AWS_ACCESS_KEY_ID=...
+   AWS_SECRET_ACCESS_KEY=...
+   AWS_REGION=auto                                                   # R2; for S3 e.g. us-east-1
+   ```
+3. Apply the lifecycle rules once (or add them in the R2 dashboard under *Object lifecycle rules*):
+
    ```bash
-   aws s3api put-bucket-lifecycle-configuration --bucket BUCKET \
+   aws s3api put-bucket-lifecycle-configuration --bucket clipper \
      --endpoint-url https://ACCOUNT_ID.r2.cloudflarestorage.com \
      --lifecycle-configuration file://storage/lifecycle.json
-   aws s3 sync clips/ s3://BUCKET/clips/STREAM/ --endpoint-url https://ACCOUNT_ID.r2.cloudflarestorage.com
    ```
 
-   To re-edit within 30 days, sync `clips/<stream>/` back down and run
-   `python clipper.py --clips-json clips/clips.json ...`.
+Then:
+
+```bash
+# Find clips, keep segments, upload everything, print download links
+python clipper.py --video vods/alice_0412.mp4 --transcribe --save-segments --preview \
+  --upload --upload-vod --links
+
+# Within 30 days, from any machine: download the run and render the keepers from its segments
+python clipper.py --fetch alice_0412                 # -> clips/alice_0412/
+python clipper.py --clips-json clips/alice_0412/clips.json --streamer alice --burn-captions --upload
+```
+
+The stream's name in the bucket is the video's file name (letters, digits, `-` and `_`), or
+`--stream NAME`; it's saved in `clips.json`, so re-uploads go to the same place. Only the files
+a run made are uploaded, so a shared `--out` folder doesn't leak other streams' clips. Segments
+already in the bucket aren't uploaded again. Download links last at most 7 days (the limit on
+both S3 and R2), so for longer access have your app make a fresh link when someone downloads.
 
 Lifecycle deletes run up to a day late. If you promise users exactly 30 days, expire their
 download links in the app as well. If bucket versioning is on, also expire noncurrent versions,
