@@ -27,7 +27,8 @@ from .transcript import Segment, segments_between
 DEFAULT_LIBRARY = Path("library.json")
 DEFAULT_RANKER = Path("ranker.json")
 CATEGORIES = ["chaos", "funny", "reaction", "skill", "story", "other"]
-CHAT_LAG = 15.0  # chat reacts after the moment, so look this far past the clip end
+CHAT_LAG = 15.0
+DEFAULT_PAD = 3.0  # clipper's default --pad-before + --pad-after, for clips that don't record it  # chat reacts after the moment, so look this far past the clip end
 
 MIN_EXAMPLES = 5      # posted clips with stats before examples are used
 MIN_TRAIN = 30        # ... before a ranker can be trained
@@ -43,7 +44,10 @@ def clip_text(clip: Clip, segs: list[Segment], limit: int = 1200) -> str:
     return text[:limit]
 
 
-def clip_features(clip: Clip, segs: list[Segment], signals=None) -> dict:
+def clip_features(clip: Clip, segs: list[Segment], signals=None, pad: float = DEFAULT_PAD) -> dict:
+    """Measurements for the re-ranker, plus `posted_length` (content + cut padding,
+    i.e. the length of the video that gets posted). `posted_length` is bookkeeping
+    for retention, not one of the ranker's FEATURES."""
     dur = max(clip.duration, 0.1)
     inside = segments_between(segs, clip.start, clip.end)
     words = sum(len(s.text.split()) for s in inside)
@@ -56,6 +60,7 @@ def clip_features(clip: Clip, segs: list[Segment], signals=None) -> dict:
         "speech_fraction": round(min(max(covered / dur, 0.0), 1.0), 2),
         "audio_peak_db": 0.0, "audio_spikes": 0,
         "chat_peak_ratio": 0.0, "chat_bursts": 0,
+        "posted_length": round(dur + pad, 1),
     }
     if signals is not None:
         audio = [e for e in signals.events if e.kind == "audio"
@@ -69,6 +74,13 @@ def clip_features(clip: Clip, segs: list[Segment], signals=None) -> dict:
     for c in CATEGORIES:
         f[f"cat_{c}"] = 1.0 if clip.category == c else 0.0
     return f
+
+
+def posted_length(clip: Clip) -> float:
+    """Seconds in the posted video. Clips picked before this was recorded get the
+    default padding added to their content length."""
+    recorded = (clip.features or {}).get("posted_length")
+    return round(float(recorded) if recorded else clip.duration + DEFAULT_PAD, 1)
 
 
 FEATURES = ["claude_score", "duration", "hook_chars", "words_per_sec", "speech_fraction",
@@ -121,7 +133,7 @@ def record_post(lib: dict, clip: Clip, *, streamer: str | None, video: str | Non
     entry.update({
         "id": key, "streamer": streamer or "", "video": video or "",
         "title": clip.title, "hook": clip.hook, "category": clip.category,
-        "duration": round(clip.duration, 1), "claude_score": clip.score,
+        "duration": posted_length(clip), "claude_score": clip.score,  # posted video length
         "text": clip.text, "features": clip.features or entry.get("features", {}),
     })
     post = entry.setdefault("posts", {}).setdefault(platform, {})

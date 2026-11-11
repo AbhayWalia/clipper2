@@ -232,7 +232,7 @@ def find_clips(args, segs, vlen):
     for c in clips:
         c.id = clip_id(args.video, c.start, fingerprint)
         c.text = fb.clip_text(c, segs)
-        c.features = fb.clip_features(c, segs, signals)
+        c.features = fb.clip_features(c, segs, signals, pad=pad)
     if ranker:
         print(f"Re-ranking {len(clips)} candidate(s) with {args.ranker} "
               f"(trained on {ranker['trained_on']} posted clips).")
