@@ -3,6 +3,7 @@ fallback, and an optional cheap first pass that the main model rescores."""
 
 from __future__ import annotations
 
+import html
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -295,7 +296,7 @@ def rescore_prompt(clips: list[Clip], segs: list[Segment], cfg: LLMConfig) -> st
         if notes:
             body += f"\nSignals:\n{notes}"
         parts.append(f"<candidate id=\"{i}\" start=\"{c.start:.1f}\" end=\"{c.end:.1f}\" "
-                     f"draft_title=\"{c.title}\">\n{body}\n</candidate>")
+                     f"draft_title=\"{html.escape(c.title, quote=True)}\">\n{body}\n</candidate>")
     return "\n".join(parts)
 
 
