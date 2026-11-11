@@ -9,3 +9,15 @@ __pycache__/
 
 # Secrets
 .env
+
+# macOS
+.DS_Store
+
+# Generated output and stream transcripts (re-creatable, and someone else's content)
+clips*/
+*.transcript.json
+*.16k.flac
+.pytest_cache/
+*.loudness.json
+library.json
+.venv/

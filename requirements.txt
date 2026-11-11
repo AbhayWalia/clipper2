@@ -1,3 +1,7 @@
-anthropic>=0.40
-# Optional: only needed for --transcribe
+anthropic>=2.7
+# Bundled ffmpeg with libass, used only when yours lacks it (Homebrew's does) for
+# --burn-captions / --hook-overlay.
+imageio-ffmpeg>=0.6
+# Optional, only needed for --transcribe (pick one):
+# mlx-whisper      # Apple Silicon GPU
 # faster-whisper>=1.0
