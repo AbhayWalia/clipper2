@@ -2,6 +2,8 @@ anthropic>=2.7
 # Bundled ffmpeg with libass, used only when yours lacks it (Homebrew's does) for
 # --burn-captions / --hook-overlay.
 imageio-ffmpeg>=0.6
+# Optional, only needed for --upload / --fetch (S3 or Cloudflare R2):
+# boto3>=1.36
 # Optional, only needed for --transcribe (pick one):
 # mlx-whisper      # Apple Silicon GPU
 # faster-whisper>=1.0

@@ -128,3 +128,13 @@ def test_rescore_failure_keeps_first_pass():
     client = FakeClient({"main": [msg("main", stop="max_tokens")]})
     out = llm.rescore(client, cfg(model="main"), cands, SEGS, ERRORS)
     assert out == cands
+
+
+def test_rescore_prompt_escapes_draft_titles():
+    # An unescaped '"' or '<' in a draft title broke the <candidate ...> tag.
+    import re
+    cands = [Clip(10, 30, 7, 'He said "NO WAY" <3 & ran', "h", "funny", "r")]
+    prompt = llm.rescore_prompt(cands, SEGS, cfg())
+    tag = re.search(r"<candidate [^>]*>", prompt).group(0)
+    assert tag == ('<candidate id="0" start="10.0" end="30.0" '
+                   'draft_title="He said &quot;NO WAY&quot; &lt;3 &amp; ran">')

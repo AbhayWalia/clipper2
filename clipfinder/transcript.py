@@ -171,6 +171,10 @@ def load_transcript(path: Path) -> list[Segment]:
 
 def chunk_segments(segs: list[Segment], window: float, overlap: float) -> list[list[Segment]]:
     """Split the transcript into overlapping time windows so long streams fit."""
+    if window <= 0 or not 0 <= overlap < window:
+        # Each step moves forward by window - overlap; zero or less never ends.
+        raise ValueError(f"Need window > 0 and 0 <= overlap < window (got window={window}, "
+                         f"overlap={overlap}).")
     chunks, t, last = [], segs[0].start, segs[-1].end
     while t < last:
         chunk = [s for s in segs if s.end > t and s.start < t + window]

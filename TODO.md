@@ -62,8 +62,10 @@ Ordered by priority within each section.
 
 ### Running it as a service
 - [ ] Job queue + workers (one stream per job) on serverless or spot GPUs instead of one Mac.
-- [ ] Apply `storage/lifecycle.json` to the bucket, serve clips from storage with free egress
-      (e.g. Cloudflare R2), and keep only `clips.json` + transcript + segments long term.
+- [x] Upload/fetch runs to S3 or Cloudflare R2 (`--upload`, `--fetch`); lifecycle rules in
+      `storage/lifecycle.json` (VODs 1 day, clips and segments 30 days, recipes kept).
+- [ ] Apply `storage/lifecycle.json` to the real bucket and test `--upload` against it.
+- [ ] Download links from the app (signed links last at most 7 days; make one per download).
 - [ ] Per-run cost logging (token usage from each response, Whisper minutes, render time) so
       the cost per clip is measured, not estimated.
 - [ ] Bundle a caption font: Arial isn't on most Linux servers.

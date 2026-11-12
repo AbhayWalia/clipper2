@@ -8,19 +8,20 @@ import os
 import shutil
 import sys
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import feedback as fb
 from . import llm
 from .captions import CaptionStyle, build_ass
-from .clips import clean_clips, load_manifest, save_manifest, update_manifest
+from .clips import (clean_clips, clip_id, load_manifest, save_manifest, source_fingerprint,
+                    update_manifest)
 from .layout import DEFAULT_LAYOUTS, Layout, grab_frame, load_layouts, parse_box, save_layout
 from .render import (SEGMENT_PAD, VERTICAL_SIZE, choose_mode, cut_clip, fmt_srt_time,
                      keyframe_before, pick_encoder, save_segments, segment_for, segment_windows,
                      slugify, video_duration, video_size, write_clip_srt)
 from .stats import STATS
 from .signals import Signals, audio_events, chat_events, load_chat, measure_loudness
+from .storage import MAX_LINK_DAYS, Store, StorageError, load_dotenv, stream_name
 from .transcribe import transcribe, transcript_path_for
 from .transcript import chunk_segments, load_transcript
 
@@ -43,7 +44,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     io.add_argument("--whisper-model", default="small", help="Whisper size for --transcribe (small / turbo / ...)")
     io.add_argument("--keep-audio", action="store_true",
                     help="Keep the extracted 16 kHz audio (.16k.flac) next to the video")
-    io.add_argument("--out", type=Path, default=Path("clips"), help="Output folder")
+    io.add_argument("--out", type=Path,
+                    help="Output folder (default: ./clips, or the folder of --clips-json)")
     io.add_argument("--clips-json", type=Path, help="Skip the AI: cut clips from an existing clips.json")
 
     ai = p.add_argument_group("clip finding")
@@ -144,7 +146,24 @@ def parse_args(argv=None) -> argparse.Namespace:
     keep.add_argument("--from-segments", action="store_true",
                       help="With --clips-json, render from the saved segments even if the VOD exists "
                            "(automatic when it doesn't)")
-    return p.parse_args(argv)
+
+    cloud = p.add_argument_group("cloud storage: S3 or Cloudflare R2 (settings in .env, see README)")
+    cloud.add_argument("--upload", action="store_true",
+                       help="After the run, upload the output folder to clips/STREAM/ and clips.json "
+                            "+ transcript to recipes/STREAM/")
+    cloud.add_argument("--upload-vod", action="store_true",
+                       help="With --upload, also upload the source video to vods/ (deleted after 1 day)")
+    cloud.add_argument("--stream", help="Name of this stream in the bucket (default: the video's file name)")
+    cloud.add_argument("--links", action="store_true",
+                       help=f"With --upload, print download links for the clips "
+                            f"(valid {MAX_LINK_DAYS} days, the most S3/R2 allow)")
+    cloud.add_argument("--fetch", metavar="STREAM",
+                       help="Download clips/STREAM/ from the bucket into OUT/STREAM/ to re-render it, then exit")
+    args = p.parse_args(argv)
+    if args.window <= 0 or not 0 <= args.overlap < args.window:
+        p.error(f"--overlap ({args.overlap:g}) must be at least 0 and smaller than "
+                f"--window ({args.window:g}).")
+    return args
 
 
 def sound_tags(video: Path) -> list:
@@ -200,7 +219,11 @@ def find_clips(args, segs, vlen):
 
     template = args.prompt_file.read_text(encoding="utf-8") if args.prompt_file else llm.SYSTEM_PROMPT
     refusal_model = None if (args.refusal_model or "").lower() in ("", "none") else args.refusal_model
-    system = llm.render_prompt(template, args.min_len, args.max_len)
+    # Tell Claude the content limits clean_clips will enforce: the cut adds padding, so
+    # a clip that uses the full --max-len would otherwise lose its ending.
+    from .clips import content_limits
+    lo, hi = content_limits(args.min_len, args.max_len, args.pad_before + args.pad_after)
+    system = llm.render_prompt(template, lo, hi)
     examples = ""
     if args.examples > 0:
         examples = fb.examples_prompt(fb.load_library(args.library), args.examples,
@@ -250,10 +273,11 @@ def find_clips(args, segs, vlen):
     # With a re-ranker, keep every good non-overlapping candidate and let it pick the top N.
     clips = clean_clips(raw, segs, args.min_len, args.max_len, args.min_score,
                         0 if ranker else args.top, vlen, pad)
+    fingerprint = source_fingerprint(args.video)
     for c in clips:
-        c.id = f"{args.video.stem}@{c.start:.1f}"
+        c.id = clip_id(args.video, c.start, fingerprint)
         c.text = fb.clip_text(c, segs)
-        c.features = fb.clip_features(c, segs, signals)
+        c.features = fb.clip_features(c, segs, signals, pad=pad)
     if ranker:
         print(f"Re-ranking {len(clips)} candidate(s) with {args.ranker} "
               f"(trained on {ranker['trained_on']} posted clips).")
@@ -337,10 +361,54 @@ def report_run(recipe: Path, kind: str, n_clips: int) -> None:
         update_manifest(recipe, runs=(data.get("runs") or []) + [STATS.to_dict(kind, n_clips)])
     except (OSError, ValueError) as e:
         print(f"  (couldn't record run stats in {recipe}: {e})")
+def fetch_run(args) -> None:
+    """--fetch: download a stream's output folder from the bucket so it can be re-rendered."""
+    name = stream_name(args.fetch)
+    dest = args.out / name
+    try:
+        files = Store.from_env().fetch_run(name, dest, args.jobs)
+    except StorageError as e:
+        sys.exit(str(e))
+    print(f"Downloaded {len(files)} file(s) to {dest}/. Re-render with:\n"
+          f"  python clipper.py --clips-json {dest / 'clips.json'} --stream {name} ...")
+
+
+def upload_run(args, folder: Path, mode: str, made: list[Path], segments: list[dict]) -> None:
+    """--upload: push this run's files (and recipe, transcript, VOD) to the bucket.
+    Only files this run made are sent, since the output folder may hold other streams'."""
+    name = stream_name(args.stream or (args.video.stem if args.video else folder.resolve().name))
+    recipe = folder / "clips.json"
+    update_manifest(recipe, stream=name)  # so a fetched copy re-uploads under the same name
+    # Paths in the bucket mirror the run folder: clips at the top, previews/ and segments/ below.
+    files = {p.with_suffix(ext): ("previews/" if mode == "preview" else "") + p.with_suffix(ext).name
+             for p in made for ext in (".mp4", ".srt", ".ass")}
+    files.update({folder / s["file"]: s["file"] for s in segments})
+    files[recipe] = "clips.json"
+    print(f"\nUploading to {os.environ.get('CLIPPER_BUCKET', '?')} as {name}...")
+    try:
+        store = Store.from_env()
+        keys = store.upload_run(name, files, recipe, args.transcript,
+                                args.video if args.upload_vod else None, args.jobs)
+    except StorageError as e:
+        sys.exit(str(e))
+    print(f"  uploaded {len(keys)} file(s) to clips/{name}/ and recipes/{name}/"
+          + (", source to vods/" if args.upload_vod else ""))
+    if args.links:
+        sub = "previews/" if mode == "preview" else ""
+        clip_keys = sorted(k for k in store.sizes(f"clips/{name}/{sub}")
+                           if k.endswith(".mp4") and "/" not in k[len(f"clips/{name}/{sub}"):])
+        print(f"Download links (valid {MAX_LINK_DAYS} days):")
+        for k in clip_keys:
+            print(f"  {k.rsplit('/', 1)[-1]}: {store.link(k)}")
 
 
 def main(argv=None) -> None:
+    load_dotenv()
     args = parse_args(argv)
+    if args.out is None:
+        args.out = args.clips_json.parent if args.clips_json else Path("clips")
+    if args.fetch:
+        return fetch_run(args)
 
     manifest = {}
     if args.clips_json:
@@ -348,8 +416,14 @@ def main(argv=None) -> None:
         # clips.json is the recipe: it remembers which video and transcript it came from.
         if not args.video and manifest.get("video"):
             args.video = Path(manifest["video"])
-        if not args.transcript and manifest.get("transcript") and Path(manifest["transcript"]).exists():
-            args.transcript = Path(manifest["transcript"])
+        if not args.stream and manifest.get("stream"):
+            args.stream = manifest["stream"]
+        if not args.transcript and manifest.get("transcript"):
+            t = Path(manifest["transcript"])
+            if not t.exists():  # e.g. a run fetched from storage: the transcript sits beside it
+                t = args.clips_json.parent / t.name
+            if t.exists():
+                args.transcript = t
 
     if args.url:
         with STATS.stage("download"):
@@ -432,8 +506,15 @@ def main(argv=None) -> None:
               f"({c.duration:.0f}s) {c.title}")
 
     if args.dry_run:
-        print(f"\nDry run: clip list saved to {args.out/'clips.json'}. "
-              f"Cut later with --clips-json {args.out/'clips.json'}")
+        if args.clips_json:  # nothing new was written; point at the file that exists
+            print(f"\nDry run: nothing was cut or written. The clip list is {args.clips_json}; "
+                  f"cut later with --clips-json {args.clips_json}")
+        else:
+            print(f"\nDry run: clip list saved to {args.out/'clips.json'}. "
+                  f"Cut later with --clips-json {args.out/'clips.json'}")
+        if args.save_segments:
+            print("--save-segments was skipped because this is a dry run; "
+                  "run again without --dry-run to save the segments.")
         report_run(args.clips_json or args.out / "clips.json", "find", len(clips))
         return
 
@@ -520,15 +601,20 @@ def main(argv=None) -> None:
                       hook_seconds=args.hook_seconds)
         jobs.append((src, base.with_suffix(".mp4"), start - offset, end - offset, clip_mode,
                      args.vertical, ass, clip_encoder, layout))
-    with STATS.stage("cut"), ThreadPoolExecutor(max_workers=max(args.jobs, 1)) as pool:
-        futures = {pool.submit(cut_clip, *job): job[1].name for job in jobs}
-        for done in as_completed(futures):
-            done.result()
-            print(f"  saved {futures[done]}")
+    from .render import run_cut_jobs
+    with STATS.stage("cut"):
+        saved, failed = run_cut_jobs(jobs, args.jobs)
 
     recipe = args.clips_json or args.out / "clips.json"
-    print(f"\nDone. {len(jobs)} clips in {dest}/ (details in {recipe})")
-    report_run(recipe, "render" if args.clips_json else "find+cut", len(jobs))
+    if failed:
+        print(f"\nDone with errors: {len(saved)} of {len(jobs)} clips saved in {dest}/, "
+              f"{len(failed)} failed (details in {recipe}):")
+        for name, reason in sorted(failed):
+            print(f"  - {name}: {reason}")
+        print("Fix the cause above and re-run; the saved clips are fine.")
+    else:
+        print(f"\nDone. {len(jobs)} clips in {dest}/ (details in {recipe})")
+    report_run(recipe, "render" if args.clips_json else "find+cut", len(saved))
     if mode == "preview":
         print(f"Review the previews in the web UI (python ui.py: Keep/Reject, then Render approved),\n"
               f"or delete the clips you don't want from clips.json and render\n"
@@ -537,6 +623,13 @@ def main(argv=None) -> None:
               f"{' --vertical' if args.vertical and not layout else ''}"
               f"{' --burn-captions' if args.burn_captions else ''}"
               f"{' --hook-overlay' if args.hook_overlay else ''}")
+    if failed:
+        if args.upload:
+            print("Not uploaded: a clip failed, so nothing was sent to the bucket. "
+                  "Fix it and re-run with --upload.")
+        sys.exit(1)
+    if args.upload:
+        upload_run(args, folder, mode, [job[1] for job in jobs], segments)
 
 
 if __name__ == "__main__":
