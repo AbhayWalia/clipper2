@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -37,6 +38,30 @@ class Clip:
         return cls(**kw)
 
 
+def source_fingerprint(video: Path, sample: int = 1 << 20) -> str:
+    """Short, stable fingerprint of a video's contents: its size plus its first and
+    last megabyte. Fast even for multi-GB VODs, unchanged if the file is moved or
+    renamed, and different for two VODs that happen to share a filename."""
+    h = hashlib.sha1()
+    try:
+        size = video.stat().st_size
+        h.update(str(size).encode())
+        with open(video, "rb") as f:
+            h.update(f.read(sample))
+            if size > sample:
+                f.seek(max(size - sample, sample))
+                h.update(f.read(sample))
+    except OSError:
+        h.update(str(video.resolve()).encode())
+    return h.hexdigest()[:8]
+
+
+def clip_id(video: Path, start: float, fingerprint: str | None = None) -> str:
+    """e.g. 'stream-3fa94c1e@612.4'. The fingerprint keeps clips from different VODs
+    with the same filename apart in the feedback library."""
+    return f"{video.stem}-{fingerprint or source_fingerprint(video)}@{start:.1f}"
+
+
 SNAP_OUT = 3.0  # an edge may move outward this far (more setup / more payoff)
 SNAP_IN = 1.0   # ...but inward only this far: Claude starts clips early on purpose
 
@@ -61,6 +86,14 @@ def snap_to_segments(clip: Clip, segs: list[Segment],
     return clip
 
 
+def content_limits(min_len: float, max_len: float, pad: float) -> tuple[float, float]:
+    """(shortest, longest) clip *content* in seconds. --min-len/--max-len apply to the
+    final cut, which adds `pad` seconds (before + after), so the content must leave room
+    for it. One place for this rule: the prompt and clean_clips both use it."""
+    lo = max(min_len - pad, 1.0)
+    return lo, max(max_len - pad, lo)
+
+
 def clean_clips(clips: list[Clip], segs: list[Segment], min_len: float,
                 max_len: float, min_score: float, top: int,
                 video_len: float | None, pad: float = 0.0) -> list[Clip]:
@@ -70,8 +103,7 @@ def clean_clips(clips: list[Clip], segs: list[Segment], min_len: float,
     apply to the final padded clip, so the content is held to
     [min_len - pad, max_len - pad].
     """
-    lo = max(min_len - pad, 1.0)
-    hi = max(max_len - pad, lo)
+    lo, hi = content_limits(min_len, max_len, pad)
     out = []
     for c in clips:
         if c.end <= c.start:

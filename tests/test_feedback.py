@@ -52,7 +52,7 @@ def test_record_post_merges_platforms():
     t = fb.totals(lib[c.id])
     assert t["views"] == 5000 and t["shares"] == 7
     assert t["avg_watch"] == pytest.approx((15 * 2000 + 25 * 3000) / 5000)
-    assert t["retention"] == pytest.approx(t["avg_watch"] / 30)
+    assert t["retention"] == pytest.approx(t["avg_watch"] / (30 + fb.DEFAULT_PAD))  # posted length
     with pytest.raises(ValueError):
         fb.record_post(lib, clip(id=""), streamer="a", video="v", platform="tiktok", views=1)
 

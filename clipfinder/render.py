@@ -88,10 +88,13 @@ def slugify(text: str, n: int = 40) -> str:
 
 
 def fmt_srt_time(t: float) -> str:
-    t = max(t, 0)
-    h, rem = divmod(t, 3600)
-    m, s = divmod(rem, 60)
-    return f"{int(h):02d}:{int(m):02d}:{int(s):02d},{int(round((s % 1) * 1000)) % 1000:03d}"
+    # Round to whole milliseconds first, then split, so 59.9996 carries to 00:01:00,000
+    # instead of wrapping the milliseconds and jumping back to 00:00:59,000.
+    ms = int(round(max(t, 0) * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def write_clip_srt(path: Path, segs: list[Segment], t0: float, t1: float) -> None:
@@ -184,6 +187,28 @@ def cut_clip(video: Path, out: Path, start: float, end: float, mode: str,
             raise
         print(f"  {encoder} failed on {out.name}, retrying with libx264")
         cut_clip(video, out, start, end, mode, vertical, ass, "libx264", layout)
+
+
+def run_cut_jobs(jobs: list[tuple], workers: int = 4, cut=None) -> tuple[list[str], list[tuple[str, str]]]:
+    """Cut every clip, `workers` at a time. One failure doesn't stop the others:
+    returns (saved file names, [(failed file name, reason), ...])."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    cut = cut or cut_clip
+    saved: list[str] = []
+    failed: list[tuple[str, str]] = []
+    with ThreadPoolExecutor(max_workers=max(workers, 1)) as pool:
+        futures = {pool.submit(cut, *job): Path(job[1]).name for job in jobs}
+        for done in as_completed(futures):
+            name = futures[done]
+            try:
+                done.result()
+            except Exception as e:  # ffmpeg error, missing file, bad crop box, ...
+                failed.append((name, str(e) or type(e).__name__))
+                print(f"  FAILED {name}: {e}")
+            else:
+                saved.append(name)
+                print(f"  saved {name}")
+    return saved, failed
 
 
 # --------------------------------------------------------------------------- #

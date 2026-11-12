@@ -165,3 +165,24 @@ def test_signal_notes_mark_no_speech_and_feed_prompt():
     prompt = llm.section_prompt(segs, cfg)
     assert llm.SIGNALS_HEADER in prompt and "(no speech)" in prompt
     assert "audio spike" not in llm.section_prompt(segs, llm.LLMConfig(system="s"))
+
+
+def test_signal_notes_keep_both_kinds_when_crowded():
+    from clipfinder.signals import Event
+    # 25 audio spikes (9-13 dB) would crowd out chat bursts (4-6x) in a single ranking.
+    events = [Event(float(i * 10), float(i * 10 + 2), "audio", 9.0 + i % 5) for i in range(25)]
+    events += [Event(50, 60, "chat", 6.0, "KEKW"), Event(120, 130, "chat", 4.0, "LUL")]
+    notes = Signals(events, []).notes(0, 1000).splitlines()
+    assert len(notes) == 20
+    assert sum("chat burst" in n for n in notes) == 2           # both chat bursts survive
+    assert sum("audio spike" in n for n in notes) == 18         # unused chat share goes to audio
+    assert all("+13 dB" in n or "+12 dB" in n or "+11 dB" in n or "+10 dB" in n
+               for n in notes if "audio" in n)                   # strongest audio kept
+    starts = [float(n[1:n.index("-")]) for n in notes]
+    assert starts == sorted(starts)                              # time order
+
+
+def test_signal_notes_single_kind_uses_all_slots():
+    from clipfinder.signals import Event
+    events = [Event(float(i), float(i) + 1, "audio", float(i)) for i in range(30)]
+    assert len(Signals(events, []).notes(0, 100).splitlines()) == 20
