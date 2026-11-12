@@ -2,8 +2,11 @@
 
 Give it a long gameplay video and its transcript. Claude reads the transcript, picks the best
 clip-worthy moments (chases, wasted/busted moments, big reactions, funny bits), and ffmpeg cuts
-them out as short clips for TikTok, Shorts and Reels. The default prompt is tuned for GTA; use
-`--prompt-file` for other games.
+them out as short clips for TikTok, Shorts and Reels. Loudness spikes, chat bursts and a sound
+model (laughter, gunfire, explosions, sirens...) help it find moments nobody talks about. The
+default prompt is tuned for GTA; edit it in the web UI or use `--prompt-file` for other games.
+
+Use it from the command line (`python clipper.py`) or the web UI (`python ui.py`).
 
 ## Setup
 
@@ -12,11 +15,15 @@ them out as short clips for TikTok, Shorts and Reels. The default prompt is tune
    Homebrew's ffmpeg can't burn in text (no libass); the `imageio-ffmpeg` package in
    requirements.txt bundles one that can, and it's used automatically for captions and hooks.
 2. Make a venv and install: `python3.12 -m venv .venv && source .venv/bin/activate &&
-   pip install -r requirements.txt` (plus `mlx-whisper` for `--transcribe` on Apple Silicon,
-   and `yt-dlp chat-downloader` for `--url`).
+   pip install -r requirements.txt`. Optional extras:
+   - `mlx-whisper` (Apple Silicon) or `faster-whisper`: transcribe videos with no captions
+   - `yt-dlp chat-downloader`: `--url` downloads
+   - `panns-inference`: sound detection (see below)
 3. Get an API key from https://console.anthropic.com and set it:
    - Mac/Linux: `export ANTHROPIC_API_KEY=sk-ant-...`
    - Windows (PowerShell): `$env:ANTHROPIC_API_KEY="sk-ant-..."`
+   - Web UI only: or put `ANTHROPIC_API_KEY=sk-ant-...` in a `.env` file in this folder
+     (git-ignored); `ui.py` reads it.
 
 ## Usage
 
@@ -33,8 +40,8 @@ python clipper.py --video stream.mp4 --transcribe
 
 # Cheapest workflow: find clips, render 480p previews, then render only the keepers
 python clipper.py --video stream.mp4 --transcript stream.srt --preview
-#   ...watch clips/previews/, delete the clips you don't want from clips/clips.json...
-python clipper.py --clips-json clips/clips.json --vertical --burn-captions
+#   ...review the previews (easiest in the web UI: Keep / Reject)...
+python clipper.py --clips-json clips/clips.json --only 2,5,7 --vertical --burn-captions
 
 # Not in a hurry? Batch API (half price) with a Haiku first pass that Sonnet rescores
 python clipper.py --video stream.mp4 --transcript stream.srt --batch --triage-model claude-haiku-5-5
@@ -47,6 +54,42 @@ python clipper.py --video stream.mp4 --transcript stream.srt --context "Streamer
 python clipper.py --video stream.mp4 --transcribe --chat chat.json \
   --streamer alice --burn-captions --hook-overlay
 ```
+
+## Web UI
+
+Prefer clicking to flags? Run `python ui.py` from the venv and open http://localhost:8000
+(`--port 9000` for another port). It only listens on your own machine.
+
+- **New run:** start from a Twitch/YouTube link, a video in the project folder, or a saved
+  `clips.json` (re-render with new settings, no AI cost). The main options are switches; the
+  rest (notes for Claude, clip count and length, padding, effort, Batch API, sound detection,
+  output folder) are under More options. The log streams live and a run can be stopped.
+- **Clips:** every output folder gets a tab and every clip a card with its score, category,
+  hook, timestamps, real length and why Claude picked it, plus Download and Copy caption.
+  Clips listed in `clips.json` but not cut yet get a **Cut them now** button.
+
+It runs `clipper.py` under the hood, so the UI and the command line always behave the same.
+It reads `ANTHROPIC_API_KEY` from `.env` or `../.env` if it isn't set.
+
+- **Review:** on each clip, Keep or Reject it and nudge its start/end by a second. Choices are
+  saved in `clips.json` (`review`, plus `original_start`/`original_end` when trimmed). **Render
+  approved** cuts only the kept clips at full quality (`--only 2,5,7` on the command line).
+- **Prompt:** the Prompt button edits what Claude looks for. It's saved to `prompt.txt` and
+  every new run uses it (`--prompt-file prompt.txt`); Reset goes back to the built-in one.
+- **Cost and time:** every run prints its time per stage and Claude cost, and records them in
+  `clips.json` under `runs`. The UI shows the total spent and cost per clip for each folder.
+  Prices live in `clipfinder/stats.py`.
+
+## Sound detection
+
+The loudness scan finds loud moments; the sound model says what they are: laughter, screaming,
+gunfire, explosions, sirens, crashes and skidding. Claude sees notes like
+`[823.0-825.0] sounds like gunfire (65% likely) (no speech)` next to the transcript, so it can
+find action nobody talks over. It runs PANNs locally (free, ~80x real time on an M-series Mac,
+so about a minute per hour of video, cached in `VIDEO.sounds.json`).
+
+`pip install panns-inference` to turn it on; the ~330 MB model downloads to `~/panns_data` the
+first time. `--no-sound-tags` (or the switch in the web UI) turns it off.
 
 ## Per-streamer facecam layouts
 
@@ -115,6 +158,7 @@ supports (`pip install yt-dlp chat-downloader`). Into `OUT/source/` it downloads
 - **the platform's captions**, when there are any. They're free, so Whisper is skipped. YouTube's
   automatic captions include per-word timing, so animated captions still line up. Twitch VODs
   usually have none, so Whisper runs. `--no-captions` forces Whisper.
+  If YouTube rate-limits the caption download (HTTP 429), the run carries on and uses Whisper.
 - **the chat replay** with [chat-downloader](https://github.com/xenova/chat-downloader), used for
   chat bursts. `--no-chat` skips it. If chat can't be fetched, the run continues without it.
 
@@ -136,7 +180,8 @@ In the output folder:
 - `01_five_stars_in_10_seconds.mp4`: the clip
 - `01_five_stars_in_10_seconds.srt`: captions re-timed to the clip
 - `clips.json`: every clip's times, score, title, hook text and why it was picked, plus the video
-  and transcript it came from. This is the "recipe": `--clips-json` re-renders from it.
+  and transcript it came from. This is the "recipe": `--clips-json` re-renders from it. It also
+  holds your review choices and trims, and a `runs` list with each run's time and cost.
 - `previews/`: 480p previews when you use `--preview`
 - `segments/`: with `--save-segments`, the footage around each clip (30s either side, stream
   copied). `clips.json` lists them, so `--clips-json` can re-render after the VOD is deleted.
@@ -159,6 +204,8 @@ In the output folder:
 | `--no-server-fallback` | off | Don't send the API's server-side refusal fallback |
 | `--prompt-file` | built-in GTA prompt | Your own system prompt; `{min_len}`/`{max_len}` are filled in |
 | `--preview` | off | Render 480p previews instead of full clips |
+| `--only` | all | Cut only these clip numbers from the list, e.g. `2,5,7` (files keep their numbers) |
+| `--dry-run` | off | Find clips and save `clips.json` without cutting any video |
 | `--reencode` | off | Re-encode even when a stream copy would do |
 | `--keep-audio` | off | Keep the 16 kHz audio extracted for Whisper |
 | `--save-segments` / `--segment-pad` | off / 30 | Keep the footage around each clip in `segments/` so the VOD can be deleted |
@@ -174,6 +221,7 @@ In the output folder:
 | `--hook-overlay` / `--hook-seconds` | off / 3 | Show the AI's hook text at the top of the clip |
 | `--chat` / `--chat-offset` | none / 0 | Twitch chat replay, and seconds to line it up with the video |
 | `--no-audio-signals` / `--audio-threshold` | on / 8 | Loudness-spike scan, and how many dB counts as a spike |
+| `--no-sound-tags` | on | Turn off sound detection (laughter, gunfire, explosions...) |
 | `--api-jobs` / `--jobs` | 4 / 4 | Parallel Claude calls / parallel ffmpeg cuts |
 
 ## How it works
@@ -182,15 +230,16 @@ In the output folder:
    runs Whisper on it: on the Apple Silicon GPU with mlx-whisper, otherwise faster-whisper on the
    CPU with voice-activity detection.
 2. **Signals.** ffmpeg measures loudness every second; moments much louder than the two
-   minutes around them become audio spikes (cached in `<video>.loudness.json`). With `--chat`,
+   minutes around them become audio spikes (cached in `<video>.loudness.json`). The sound model
+   labels what's happening (cached in `<video>.sounds.json`). With `--chat`,
    10-second windows where chat is much busier than usual become chat bursts, with the most
    repeated messages. Download chat with
    [TwitchDownloaderCLI](https://github.com/lay295/TwitchDownloader) (`chatdownload`, JSON) or
    [chat-downloader](https://github.com/xenova/chat-downloader) (JSON); `[0:12:34] user: msg`
    text also works.
 3. **Find.** Splits the transcript into 15-minute overlapping sections and sends them to Claude in
-   parallel (or as one batch), with that section's audio spikes and chat bursts listed under the
-   transcript, so silent action still gets found. Claude returns clips as structured data.
+   parallel (or as one batch), with that section's audio spikes, sounds and chat bursts listed
+   under the transcript, so silent action still gets found. Claude returns clips as structured data.
 4. **Refusals.** Sonnet 5.5 can decline a section. The API's server-side fallback only retries
    some refusal categories, so a declined section is re-run once on `--refusal-model`; if that
    declines too, the section is skipped and the rest of the run continues.
@@ -203,6 +252,8 @@ In the output folder:
    burned in by ffmpeg. Whisper transcripts include per-word timings; for `.srt`/`.vtt` input the
    word timings are estimated from each line, which is close but not exact. Re-run with
    `--transcribe --retranscribe` for exact timings if you made the transcript before this update.
+7. **Report.** Prints how long each stage took and what Claude cost (tokens priced per model,
+   batch discount and caching included), and appends it to `runs` in `clips.json`.
 
 ### Code layout
 
@@ -216,16 +267,21 @@ In the output folder:
 | `clipfinder/render.py` | ffmpeg: stream copy, re-encode, previews |
 | `clipfinder/captions.py` | Word-by-word captions and the hook banner (ASS) |
 | `clipfinder/layout.py` | Per-streamer facecam layouts and the split-screen filter |
-| `clipfinder/signals.py` | Audio loudness spikes and chat bursts |
+| `clipfinder/signals.py` | Audio loudness spikes and chat bursts, and the notes Claude sees |
+| `clipfinder/sounds.py` | Sound detection with PANNs (laughter, gunfire, explosions...) |
+| `clipfinder/stats.py` | Run timing, token usage and cost (prices per model live here) |
+| `clipfinder/web.py`, `clipfinder/static/index.html` | The web UI (`ui.py`) |
 | `clipfinder/feedback.py` | Library of posted clips, prompt examples, re-ranker |
 | `clipfinder/feedback_cli.py` | The `feedback.py` command |
 | `clipfinder/cli.py` | Command-line options and the pipeline |
 
-Tests: `pip install pytest && pytest` (no API key or ffmpeg needed).
+Tests: `pip install pytest && pytest` (no API key needed; the one test that needs ffmpeg is
+skipped without it).
 
 ## Costs
 
-Claude costs cents per stream: a one-hour stream is roughly 10K input tokens. `--effort low`,
+Claude costs cents per stream: a one-hour stream is roughly 10K input tokens. Every run prints
+its actual cost and cost per clip, and the web UI shows the total per folder. `--effort low`,
 `--batch` and `--triage-model claude-haiku-5-5` cut that further. Before making Haiku triage your
 default, compare it with a normal run on a few streams to check it isn't missing good clips.
 Nearly all the real cost is video: transcription, encoding and storage.
@@ -312,6 +368,9 @@ and TikTok, Shorts and Reels give 1080p uploads better quality. Two more savings
 
 ## Ideas for what to add next
 
+- A benchmark: score the finder against a VOD's most-viewed Twitch community clips, so prompt
+  and model changes are measured instead of guessed.
+- Download only what's needed: fetch audio and chat first, then only the clip sections.
+- Send Claude a few frames from each candidate clip when rescoring, to catch visual moments.
 - Detect GTA HUD events (wanted stars, "Wasted") from the video frames.
 - Detect the facecam box automatically (face detection on a few frames) to speed up layout setup.
-- A review page for nudging clip edges and approving clips before the full render.

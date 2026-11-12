@@ -19,5 +19,6 @@ clips*/
 *.16k.flac
 .pytest_cache/
 *.loudness.json
+*.sounds.json
 library.json
 .venv/

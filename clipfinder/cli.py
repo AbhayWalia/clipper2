@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+from collections import Counter
 from pathlib import Path
 
 from . import feedback as fb
@@ -18,6 +19,7 @@ from .layout import DEFAULT_LAYOUTS, Layout, grab_frame, load_layouts, parse_box
 from .render import (SEGMENT_PAD, VERTICAL_SIZE, choose_mode, cut_clip, fmt_srt_time,
                      keyframe_before, pick_encoder, save_segments, segment_for, segment_windows,
                      slugify, video_duration, video_size, write_clip_srt)
+from .stats import STATS
 from .signals import Signals, audio_events, chat_events, load_chat, measure_loudness
 from .storage import MAX_LINK_DAYS, Store, StorageError, load_dotenv, stream_name
 from .transcribe import transcribe, transcript_path_for
@@ -91,6 +93,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                      help="Don't scan the audio for loudness spikes")
     sig.add_argument("--audio-threshold", type=float, default=8.0,
                      help="dB above the surrounding 2 minutes that counts as a spike")
+    sig.add_argument("--no-sound-tags", action="store_true",
+                     help="Don't label sounds (laughter, gunfire, explosions, sirens...) with PANNs")
 
     lay = p.add_argument_group("facecam layout (per streamer)")
     lay.add_argument("--streamer", help="Use this streamer's facecam layout from the layouts file "
@@ -127,6 +131,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     cut.add_argument("--reencode", action="store_true",
                      help="Re-encode even when stream copy would do (frame-accurate start)")
     cut.add_argument("--dry-run", action="store_true", help="Find clips but don't cut video")
+    cut.add_argument("--only", help="Cut only these clip numbers from the list, e.g. 1,3,7 "
+                                    "(files keep their numbers)")
     cut.add_argument("--jobs", type=int, default=4, help="Clips to cut at the same time")
     cut.add_argument("--encoder", choices=["auto", "h264_videotoolbox", "libx264"], default="auto",
                      help="auto uses the Mac's hardware encoder when available")
@@ -160,6 +166,28 @@ def parse_args(argv=None) -> argparse.Namespace:
     return args
 
 
+def sound_tags(video: Path) -> list:
+    """Laughter/gunfire/explosions... from the sound model; optional, never blocks a run."""
+    cache = video.with_suffix(".sounds.json")
+    try:
+        from .sounds import sound_events, tag_audio
+        import panns_inference  # noqa: F401  (checked here so the hint below is accurate)
+    except ImportError:
+        print("  (sound tags skipped: pip install panns-inference)")
+        return []
+    print("Labelling sounds (laughter, gunfire, explosions...)" +
+          (" (cached)" if cache.exists() else "; about 1 min per hour of video") + "...")
+    try:
+        events = sound_events(tag_audio(video, cache))
+    except Exception as e:  # a bonus signal; never block clipping on it
+        print(f"  sound tagging failed ({e}); continuing without it")
+        return []
+    if events:
+        top = Counter(e.detail for e in events).most_common(4)
+        print("  heard " + ", ".join(f"{k} x{v}" for k, v in top))
+    return events
+
+
 def build_signals(args, segs) -> Signals | None:
     events = []
     if not args.no_audio_signals:
@@ -169,12 +197,14 @@ def build_signals(args, segs) -> Signals | None:
             events += audio_events(measure_loudness(args.video, cache), args.audio_threshold)
         except Exception as e:  # never block clipping on this
             print(f"  audio scan failed ({e}); continuing without it")
+    if not args.no_sound_tags:
+        events += sound_tags(args.video)
     if args.chat:
         events += chat_events(load_chat(args.chat), offset=args.chat_offset)
     if not events:
         return None
-    n_audio = sum(e.kind == "audio" for e in events)
-    print(f"  {n_audio} audio spike(s), {len(events) - n_audio} chat burst(s)")
+    n = Counter(e.kind for e in events)
+    print(f"  {n['audio']} audio spike(s), {n['sound']} tagged sound(s), {n['chat']} chat burst(s)")
     return Signals(events, segs)
 
 
@@ -321,6 +351,16 @@ def fetch_url(args) -> None:
         print(f"  streamer: {args.streamer} (from the channel name; override with --streamer)")
 
 
+def report_run(recipe: Path, kind: str, n_clips: int) -> None:
+    """Print time and cost, and keep a record of them in clips.json under "runs"."""
+    summary = STATS.summary(n_clips)
+    if summary:
+        print("\n" + summary)
+    try:
+        data = json.loads(recipe.read_text(encoding="utf-8"))
+        update_manifest(recipe, runs=(data.get("runs") or []) + [STATS.to_dict(kind, n_clips)])
+    except (OSError, ValueError) as e:
+        print(f"  (couldn't record run stats in {recipe}: {e})")
 def fetch_run(args) -> None:
     """--fetch: download a stream's output folder from the bucket so it can be re-rendered."""
     name = stream_name(args.fetch)
@@ -386,7 +426,8 @@ def main(argv=None) -> None:
                 args.transcript = t
 
     if args.url:
-        fetch_url(args)
+        with STATS.stage("download"):
+            fetch_url(args)
 
     # Saved segments live next to clips.json; their paths in it are relative to it.
     folder = args.clips_json.parent if args.clips_json else args.out
@@ -438,7 +479,8 @@ def main(argv=None) -> None:
             print(f"Reusing existing transcript {cached} (pass --retranscribe to redo it).")
             args.transcript = cached
         else:
-            args.transcript = transcribe(args.video, args.whisper_model, args.keep_audio)
+            with STATS.stage("transcribe"):
+                args.transcript = transcribe(args.video, args.whisper_model, args.keep_audio)
     if not args.transcript and not args.clips_json:
         sys.exit("Give --transcript, --transcribe or --clips-json.")
 
@@ -447,9 +489,12 @@ def main(argv=None) -> None:
     segs = load_transcript(args.transcript) if args.transcript else []
 
     if not args.clips_json:
+        if not segs:
+            sys.exit(f"The transcript {args.transcript} has no lines, so there's nothing to find clips in.")
         print(f"Loaded {len(segs)} transcript lines "
               f"({segs[0].start/60:.0f}-{segs[-1].end/60:.0f} min).")
-        clips = find_clips(args, segs, vlen)
+        with STATS.stage("find clips"):
+            clips = find_clips(args, segs, vlen)
         save_manifest(args.out / "clips.json", clips, video=args.video.resolve(),
                       transcript=args.transcript.resolve(), model=args.model,
                       triage_model=args.triage_model, effort=args.effort,
@@ -470,6 +515,7 @@ def main(argv=None) -> None:
         if args.save_segments:
             print("--save-segments was skipped because this is a dry run; "
                   "run again without --dry-run to save the segments.")
+        report_run(args.clips_json or args.out / "clips.json", "find", len(clips))
         return
 
     if args.save_segments:
@@ -511,8 +557,11 @@ def main(argv=None) -> None:
            "encode": encoder}[mode] + (f", {args.streamer or 'custom'} facecam layout" if layout else "")
     print(f"\nCutting clips with {how} ({args.jobs} at a time)...")
 
+    only = {int(x) for x in args.only.split(",") if x.strip()} if args.only else None
     jobs = []
     for i, c in enumerate(clips, 1):
+        if only is not None and i not in only:
+            continue
         start = max(c.start - args.pad_before, 0)
         end = c.end + args.pad_after
         if vlen:
@@ -530,8 +579,16 @@ def main(argv=None) -> None:
                 print(f"  clip {i} reaches past its saved segment; trimmed to "
                       f"{fmt_srt_time(seg['start'])[:8]}-{fmt_srt_time(seg['end'])[:8]}")
                 start, end = max(start, seg["start"]), min(end, seg["end"])
+        clip_mode, clip_encoder = mode, encoder
         if mode == "copy":  # copy can only start on a keyframe
-            start = offset + keyframe_before(src, start - offset)
+            key = offset + keyframe_before(src, start - offset)
+            if end - key > args.max_len + 0.05:
+                # Starting at that keyframe would break --max-len: re-encode this one
+                # clip so it starts exactly where it should.
+                clip_mode = "encode"
+                clip_encoder = pick_encoder() if args.encoder == "auto" else args.encoder
+            else:
+                start = key
         base = dest / f"{i:02d}_{slugify(c.title)}"
         if segs:
             write_clip_srt(base.with_suffix(".srt"), segs, start, end)
@@ -542,10 +599,11 @@ def main(argv=None) -> None:
                       caption_y=layout.seam() if layout else None,
                       hook=c.hook if args.hook_overlay else None,
                       hook_seconds=args.hook_seconds)
-        jobs.append((src, base.with_suffix(".mp4"), start - offset, end - offset, mode,
-                     args.vertical, ass, encoder, layout))
+        jobs.append((src, base.with_suffix(".mp4"), start - offset, end - offset, clip_mode,
+                     args.vertical, ass, clip_encoder, layout))
     from .render import run_cut_jobs
-    saved, failed = run_cut_jobs(jobs, args.jobs)
+    with STATS.stage("cut"):
+        saved, failed = run_cut_jobs(jobs, args.jobs)
 
     recipe = args.clips_json or args.out / "clips.json"
     if failed:
@@ -555,9 +613,11 @@ def main(argv=None) -> None:
             print(f"  - {name}: {reason}")
         print("Fix the cause above and re-run; the saved clips are fine.")
     else:
-        print(f"\nDone. {len(clips)} clips in {dest}/ (details in {recipe})")
+        print(f"\nDone. {len(jobs)} clips in {dest}/ (details in {recipe})")
+    report_run(recipe, "render" if args.clips_json else "find+cut", len(saved))
     if mode == "preview":
-        print(f"Review the previews, delete the clips you don't want from clips.json, then render\n"
+        print(f"Review the previews in the web UI (python ui.py: Keep/Reject, then Render approved),\n"
+              f"or delete the clips you don't want from clips.json and render\n"
               f"the keepers at full quality:  python clipper.py --clips-json {recipe}"
               f"{f' --streamer {args.streamer}' if args.streamer else ''}"
               f"{' --vertical' if args.vertical and not layout else ''}"

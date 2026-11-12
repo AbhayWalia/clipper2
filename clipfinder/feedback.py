@@ -22,6 +22,7 @@ from datetime import date
 from pathlib import Path
 
 from .clips import Clip
+from .sounds import GROUPS as SOUND_GROUPS
 from .transcript import Segment, segments_between
 
 DEFAULT_LIBRARY = Path("library.json")
@@ -60,6 +61,7 @@ def clip_features(clip: Clip, segs: list[Segment], signals=None, pad: float = DE
         "speech_fraction": round(min(max(covered / dur, 0.0), 1.0), 2),
         "audio_peak_db": 0.0, "audio_spikes": 0,
         "chat_peak_ratio": 0.0, "chat_bursts": 0,
+        **{f"sound_{g}": 0.0 for g in SOUND_GROUPS},
         "posted_length": round(dur + pad, 1),
     }
     if signals is not None:
@@ -71,6 +73,10 @@ def clip_features(clip: Clip, segs: list[Segment], signals=None, pad: float = DE
         f["audio_spikes"] = len(audio)
         f["chat_peak_ratio"] = max((e.strength for e in chat), default=0.0)
         f["chat_bursts"] = len(chat)
+        for g in SOUND_GROUPS:
+            f[f"sound_{g}"] = max((e.strength for e in signals.events if e.kind == "sound"
+                                   and e.detail == g and e.end > clip.start and e.start < clip.end),
+                                  default=0.0)
     for c in CATEGORIES:
         f[f"cat_{c}"] = 1.0 if clip.category == c else 0.0
     return f
@@ -85,6 +91,7 @@ def posted_length(clip: Clip) -> float:
 
 FEATURES = ["claude_score", "duration", "hook_chars", "words_per_sec", "speech_fraction",
             "audio_peak_db", "audio_spikes", "chat_peak_ratio", "chat_bursts"] + \
+           [f"sound_{g}" for g in SOUND_GROUPS] + \
            [f"cat_{c}" for c in CATEGORIES]
 
 
