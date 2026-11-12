@@ -7,30 +7,29 @@ library, so there's nothing extra to install. Settings come from the environment
     SUPABASE_SERVICE_ROLE_KEY    the service-role (secret) key: server only, never in a browser
 
 Writes are upserts, so uploading the same run again updates its rows instead of failing.
+The service-role key bypasses row level security, so every query here that acts for a
+signed-in user must filter on that user's id itself (accounts.py does).
 """
 
 from __future__ import annotations
 
-import json
 import os
-import ssl
-import urllib.error
-import urllib.request
+import urllib.parse
 from dataclasses import dataclass
+
+from .httpjson import HTTPCallError, call
 
 
 class DatabaseError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int = 0):
+        super().__init__(message)
+        self.status = status
 
 
-def _ssl_context() -> ssl.SSLContext:
-    # Homebrew and python.org Pythons often lack system certificates; certifi (installed
-    # with the Anthropic SDK) has them.
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        return ssl.create_default_context()
+def _filters(where: dict) -> str:
+    """{"user_id": "abc", "id": 3} -> "user_id=eq.abc&id=eq.3" (PostgREST equality filters)."""
+    return "&".join(f"{urllib.parse.quote(k)}=eq.{urllib.parse.quote(str(v), safe='')}"
+                    for k, v in where.items())
 
 
 @dataclass
@@ -52,23 +51,53 @@ class Database:
             return None
         return cls(url, key)
 
+    def _request(self, method: str, path: str, what: str, body=None, prefer: str | None = None):
+        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+        if prefer:
+            headers["Prefer"] = prefer
+        try:
+            return call(method, f"{self.url}/rest/v1/{path}", headers=headers, json_body=body,
+                        timeout=30)
+        except HTTPCallError as e:
+            if e.status == 0:
+                raise DatabaseError(f"Couldn't reach Supabase at {self.url}: {e}") from None
+            detail = e.data if isinstance(e.data, str) else str(e.data)
+            raise DatabaseError(f"Supabase refused {what} ({e.status}): {detail[:300]}",
+                                e.status) from None
+
+    # -- generic table access ----------------------------------------------
+
     def upsert(self, table: str, rows: list[dict], on_conflict: str) -> None:
         if not rows:
             return
-        req = urllib.request.Request(
-            f"{self.url}/rest/v1/{table}?on_conflict={on_conflict}",
-            data=json.dumps(rows).encode(), method="POST",
-            headers={"apikey": self.key, "Authorization": f"Bearer {self.key}",
-                     "Content-Type": "application/json",
-                     "Prefer": "resolution=merge-duplicates,return=minimal"})
-        try:
-            with urllib.request.urlopen(req, timeout=30, context=_ssl_context()):
-                pass
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:300]
-            raise DatabaseError(f"Supabase refused the {table} rows ({e.code}): {detail}") from None
-        except (urllib.error.URLError, TimeoutError) as e:
-            raise DatabaseError(f"Couldn't reach Supabase at {self.url}: {e}") from None
+        self._request("POST", f"{table}?on_conflict={on_conflict}", f"the {table} rows", rows,
+                      "resolution=merge-duplicates,return=minimal")
+
+    def select(self, table: str, where: dict, columns: str = "*") -> list[dict]:
+        query = f"select={urllib.parse.quote(columns, safe=',*()')}"
+        if where:
+            query += "&" + _filters(where)
+        return self._request("GET", f"{table}?{query}", f"the {table} query") or []
+
+    def insert(self, table: str, row: dict) -> dict:
+        """Insert one row and return it. A duplicate raises DatabaseError with status 409."""
+        rows = self._request("POST", table, f"the new {table} row", [row], "return=representation")
+        return rows[0] if rows else {}
+
+    def update(self, table: str, where: dict, values: dict) -> list[dict]:
+        """Change matching rows and return them (an empty list when nothing matched)."""
+        if not where:
+            raise ValueError("update() needs a filter")  # never rewrite a whole table by accident
+        return self._request("PATCH", f"{table}?{_filters(where)}", f"the {table} change",
+                             values, "return=representation") or []
+
+    def delete(self, table: str, where: dict) -> list[dict]:
+        if not where:
+            raise ValueError("delete() needs a filter")
+        return self._request("DELETE", f"{table}?{_filters(where)}", f"the {table} delete",
+                             prefer="return=representation") or []
+
+    # -- runs ----------------------------------------------------------------
 
     def record_run(self, run: dict, clips: list[dict]) -> None:
         """Save a run, then its clips (they reference the run, so it goes first)."""

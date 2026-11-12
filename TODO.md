@@ -69,7 +69,16 @@ Ordered by priority within each section.
 - [x] Per-user folders in the bucket (`--user`) and Supabase tables for users, runs, clips and
       credits (`supabase/migrations/`); `--upload --user` records each run.
 - [ ] Run the migration on the real Supabase project and test `--upload --user` against it.
-- [ ] Hosted app: Supabase Auth sign-in, spend credits (`spend_credits`) before a render,
+- [x] Accounts backend + placeholder page (`/account`): sign-up/sign-in with Supabase Auth,
+      display name, delete account (files, then user), link/unlink YouTube and Twitch with
+      OAuth (`supabase/migrations/20261113000000_accounts.sql`).
+- [ ] Run the accounts migration, add `SUPABASE_ANON_KEY`, and set the Site URL and redirect
+      URL (`<CLIPPER_PUBLIC_URL>/account`) in Supabase Auth settings.
+- [ ] Create the Google and Twitch OAuth apps and test linking end to end. Google needs app
+      verification before strangers can link (YouTube scopes are sensitive).
+- [ ] Encrypt OAuth tokens at rest (Supabase Vault or an app key) before real users link accounts.
+- [ ] Password reset and email change (Supabase `recover` / `user` endpoints); real frontend.
+- [ ] Hosted app: spend credits (`spend_credits`) before a render,
       Stripe purchases into `credit_ledger`, and download links only for the user's own runs.
 - [ ] Per-run cost logging (token usage from each response, Whisper minutes, render time) so
       the cost per clip is measured, not estimated.

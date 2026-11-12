@@ -25,7 +25,11 @@ them. `README.md` covers usage, `TODO.md` what's left.
   - `stats.py`: token cost and stage timing per run
   - `storage.py`: `--upload`/`--fetch` for S3 and R2, per-user folders
   - `db.py`: recording runs and clips in Supabase (tables in `supabase/migrations/`)
-  - `web.py` + `static/index.html`: the local web UI (`ui.py`)
+  - `auth.py`: Supabase Auth (sign-up, sign-in, sessions, deleting users)
+  - `accounts.py`: profile, deleting an account, linking YouTube/Twitch with OAuth
+  - `httpjson.py`: the small JSON HTTP client the Supabase and OAuth code share
+  - `web.py` + `static/index.html`: the local web UI (`ui.py`); `static/account.html` is the
+    placeholder account page (sign-in, profile, linked accounts, delete)
   - `cli.py`: options and the pipeline
 - Tests are in `tests/`, one file per area.
 

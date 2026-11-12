@@ -101,6 +101,19 @@ class Store:
             out.update({o["Key"]: o["Size"] for o in page.get("Contents", [])})
         return out
 
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete every key under `prefix` (1000 per request, the API's limit). Returns how many."""
+        if not prefix.endswith("/") or prefix.count("/") < 2:
+            raise StorageError(f"Refusing to delete {prefix!r}: give a user's folder, like clips/<user>/.")
+        keys = list(self.sizes(prefix))
+        for i in range(0, len(keys), 1000):
+            resp = self.client.delete_objects(Bucket=self.bucket, Delete={
+                "Objects": [{"Key": k} for k in keys[i:i + 1000]], "Quiet": True})
+            if resp.get("Errors"):
+                err = resp["Errors"][0]
+                raise StorageError(f"Couldn't delete {err.get('Key')}: {err.get('Message')}")
+        return len(keys)
+
     def link(self, key: str, days: float = MAX_LINK_DAYS) -> str:
         seconds = int(min(days, MAX_LINK_DAYS) * 86400)
         return self.client.generate_presigned_url(
