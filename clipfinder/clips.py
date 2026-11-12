@@ -136,14 +136,22 @@ def clean_clips(clips: list[Clip], segs: list[Segment], min_len: float,
 def save_manifest(path: Path, clips: list[Clip], **meta) -> None:
     data = {**{k: (str(v) if isinstance(v, Path) else v) for k, v in meta.items()},
             "clips": [asdict(c) for c in clips]}
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _write_json(path, data)
+
+
+def _write_json(path: Path, data: dict) -> None:
+    """Write via a temp file so a reader (the web UI, live mode's renderer) never sees
+    half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def update_manifest(path: Path, **fields) -> None:
     """Set top-level fields (e.g. segments) in clips.json, keeping everything else."""
     data = json.loads(path.read_text(encoding="utf-8"))
     data.update(fields)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _write_json(path, data)
 
 
 def load_manifest(path: Path) -> tuple[dict, list[Clip]]:

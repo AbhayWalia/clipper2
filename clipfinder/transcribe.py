@@ -46,11 +46,13 @@ def looks_hallucinated(no_speech_prob: float | None, avg_logprob: float | None) 
     return no_speech_prob > 0.6 and avg_logprob < -0.5
 
 
-def _transcribe_mlx(audio: Path, model_size: str) -> list[dict]:
+def _transcribe_mlx(audio: Path, model_size: str, progress: bool = True) -> list[dict]:
     """Whisper on the Apple Silicon GPU."""
     import mlx_whisper
     repo = MLX_MODELS.get(model_size, model_size)
-    result = mlx_whisper.transcribe(str(audio), path_or_hf_repo=repo, verbose=False,
+    # verbose=False shows a progress bar; None is silent (no bar, no language line).
+    result = mlx_whisper.transcribe(str(audio), path_or_hf_repo=repo,
+                                    verbose=False if progress else None,
                                     condition_on_previous_text=False, word_timestamps=True)
     return [{"start": s["start"], "end": s["end"], "text": s["text"].strip(),
              "words": [{"start": w["start"], "end": w["end"], "word": w["word"].strip()}
@@ -59,13 +61,18 @@ def _transcribe_mlx(audio: Path, model_size: str) -> list[dict]:
             and not looks_hallucinated(s.get("no_speech_prob"), s.get("avg_logprob"))]
 
 
-def _transcribe_cpu(audio: Path, model_size: str) -> list[dict]:
+_CPU_MODELS: dict = {}  # loaded faster-whisper models, so live mode doesn't reload per piece
+
+
+def _transcribe_cpu(audio: Path, model_size: str, progress: bool = True) -> list[dict]:
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         sys.exit("--transcribe needs mlx-whisper (Apple Silicon) or faster-whisper:\n"
                  "  pip install mlx-whisper   or   pip install faster-whisper")
-    model = WhisperModel(model_size, compute_type="auto")
+    model = _CPU_MODELS.get(model_size)
+    if model is None:
+        model = _CPU_MODELS[model_size] = WhisperModel(model_size, compute_type="auto")
     # VAD skips silence; word timestamps drive the animated captions.
     segments, _ = model.transcribe(str(audio), vad_filter=True, word_timestamps=True)
     return [{"start": s.start, "end": s.end, "text": s.text.strip(),
@@ -74,6 +81,12 @@ def _transcribe_cpu(audio: Path, model_size: str) -> list[dict]:
             for s in segments
             if not looks_hallucinated(getattr(s, "no_speech_prob", None),
                                       getattr(s, "avg_logprob", None))]
+
+
+def transcribe_audio(audio: Path, model_size: str = "small", progress: bool = True) -> list[dict]:
+    """Whisper segments ({start, end, text, words}) for an audio file, GPU if available."""
+    use_mlx = importlib.util.find_spec("mlx_whisper") is not None
+    return (_transcribe_mlx if use_mlx else _transcribe_cpu)(audio, model_size, progress)
 
 
 def transcribe(video: Path, model_size: str = "small", keep_audio: bool = False) -> Path:
