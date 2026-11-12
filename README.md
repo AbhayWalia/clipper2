@@ -34,6 +34,9 @@ python clipper.py --url https://www.twitch.tv/videos/123456789 --streamer alice 
 # Long VOD? Download only the audio, then only the video around each clip (see below)
 python clipper.py --url https://www.twitch.tv/videos/123456789 --audio-first --burn-captions
 
+# Clip a stream while it's live; clips appear a few minutes after each moment (Ctrl+C to stop)
+python clipper.py --live https://www.twitch.tv/alice --vertical --burn-captions
+
 # Basic: find clips and cut them into ./clips
 python clipper.py --video stream.mp4 --transcript stream.srt
 
@@ -190,6 +193,40 @@ then downloads only the video around each clip into `segments/`, 8 sections at a
 
 The web UI's **Link** tab has an **Audio first** switch, on by default.
 
+## Live streams
+
+`--live URL` clips a Twitch (or YouTube) stream while it's on:
+
+```bash
+python clipper.py --live https://www.twitch.tv/alice --vertical --burn-captions --whisper-model turbo
+```
+
+- ffmpeg records the stream in 10-second chunks. Every 30 s of new recording is transcribed
+  with Whisper and scanned for loudness spikes and sounds; chat is read live.
+- Every 3 minutes, Claude reads the newest few minutes (with 2 minutes of earlier context) and
+  picks moments. A chat burst, loudness spike or a scream, laugh or explosion triggers a look
+  sooner (at most once a minute).
+- A moment only counts once there's a minute of stream after it, because the reaction is often
+  the best part. So **clips appear about 2-4 minutes after the moment**.
+- Clips are cut in the background, so transcription keeps up. Moments Claude sees twice (each
+  look overlaps the last) are only clipped once.
+- Ctrl+C stops recording, checks the last stretch, and waits for the last cuts. The run also
+  ends by itself when the stream goes offline (or sends no video for 2 minutes), and reconnects
+  if the connection drops.
+
+Each session gets its own folder, `OUT/live_<channel>_<date-time>/`, with clips.json, the
+transcript, the clips, and `chunks/` (the recording). Only the last 15 minutes of chunks are
+kept (each clip's footage is copied to `segments/` first); `--keep-recording` keeps it all.
+The folder shows up in the web UI like any other run, so you can review clips while the
+stream is still on and re-render them with different settings later.
+
+**Cost and limits:** about $0.03 per 7 minutes of stream with Sonnet in testing, so roughly
+$1-2 for a 6-hour stream (`--triage-model claude-haiku-5-5` for less). The whole video is
+recorded as it airs (about 3 GB/hour at 1080p60; `--max-height 720` roughly halves it), and
+the clipper must run for the whole stream. It can't clip what aired before it started.
+Twitch may insert ads into the stream for viewers who aren't logged in; they get recorded
+too. Only clip streams you have permission to use.
+
 ## Transcript formats
 
 - `.srt` / `.vtt` subtitle files (YouTube, Twitch, Premiere, CapCut, etc.). Captions you already
@@ -215,6 +252,7 @@ In the output folder:
 | Option | Default | What it does |
 |---|---|---|
 | `--url` | none | Twitch VOD / YouTube URL: downloads video, captions and chat |
+| `--live` / `--keep-recording` | none / off | Clip a live stream as it happens / keep the whole recording |
 | `--audio-first` | off | With --url, download the audio to find clips, then only the video around each clip |
 | `--no-captions` / `--no-chat` | off | With --url, use Whisper instead of the platform captions / skip chat |
 | `--top` | 15 | Max clips to keep (0 = all) |
@@ -284,6 +322,7 @@ In the output folder:
 
 | Module | What's in it |
 |---|---|
+| `clipfinder/live.py` | `--live`: recording in chunks, rolling transcription, Claude every few minutes |
 | `clipfinder/fetch.py` | `--url`: download video (or audio first, then clip sections), captions and chat |
 | `clipfinder/transcript.py` | Transcript parsers and chunking |
 | `clipfinder/transcribe.py` | Audio extraction, Whisper, and filtering Whisper's invented filler |

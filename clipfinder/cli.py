@@ -33,6 +33,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     io.add_argument("--url", help="Twitch VOD / YouTube URL: downloads the video, its captions and chat")
     io.add_argument("--source-dir", type=Path, help="Where --url downloads go (default: OUT/source)")
     io.add_argument("--no-chat", action="store_true", help="With --url, don't download chat")
+    io.add_argument("--live", metavar="URL",
+                    help="Clip a live stream while it's on (Twitch or YouTube live URL). Records it in "
+                         "chunks and cuts clips a few minutes after each moment. Stop with Ctrl+C")
+    io.add_argument("--keep-recording", action="store_true",
+                    help="With --live, keep the whole recording instead of only the last 15 minutes")
+    io.add_argument("--live-readrate", type=float, help=argparse.SUPPRESS)  # replay a file as if live, faster
     io.add_argument("--audio-first", action="store_true",
                     help="With --url, download only the audio (plus captions and chat) to find clips, "
                          "then only the video around each clip. Far less to download for long VODs")
@@ -166,6 +172,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     cloud.add_argument("--fetch", metavar="STREAM",
                        help="Download clips/STREAM/ from the bucket into OUT/STREAM/ to re-render it, then exit")
     args = p.parse_args(argv)
+    if args.live:
+        clash = [flag for flag, on in (("--url", args.url), ("--video", args.video),
+                                       ("--clips-json", args.clips_json), ("--transcript", args.transcript),
+                                       ("--batch", args.batch), ("--audio-first", args.audio_first)) if on]
+        if clash:
+            p.error(f"--live can't be combined with {', '.join(clash)}.")
     if args.audio_first and not args.url:
         p.error("--audio-first needs --url (it downloads the video around each clip from there).")
     if args.window <= 0 or not 0 <= args.overlap < args.window:
@@ -216,7 +228,12 @@ def build_signals(args, segs) -> Signals | None:
     return Signals(events, segs)
 
 
-def find_clips(args, segs, vlen):
+_BUILD = object()
+
+
+def find_clips(args, segs, vlen, signals=_BUILD):
+    """Clips for these transcript lines. `signals` defaults to scanning args.video and
+    args.chat; live mode passes its own (or None)."""
     try:
         import anthropic
     except ImportError:
@@ -243,7 +260,8 @@ def find_clips(args, segs, vlen):
                         context=args.context, refusal_model=refusal_model,
                         server_fallback=not args.no_server_fallback,
                         cache_system=bool(examples))
-    signals = build_signals(args, segs)
+    if signals is _BUILD:
+        signals = build_signals(args, segs)
     if signals:
         cfg.notes = signals.notes
 
@@ -441,13 +459,17 @@ def upload_run(args, folder: Path, mode: str, made: list[Path], segments: list[d
             print(f"  {k.rsplit('/', 1)[-1]}: {store.link(k)}")
 
 
-def main(argv=None) -> None:
+def main(argv=None, quiet: bool = False) -> None:
+    """quiet: don't list every clip or report cost (live mode renders a few clips at a time)."""
     load_dotenv()
     args = parse_args(argv)
     if args.out is None:
         args.out = args.clips_json.parent if args.clips_json else Path("clips")
     if args.fetch:
         return fetch_run(args)
+    if args.live:
+        from .live import run_live
+        return run_live(args)
 
     manifest = {}
     if args.clips_json:
@@ -495,8 +517,9 @@ def main(argv=None) -> None:
             sys.exit(f"Saved segment(s) missing from {folder}: {', '.join(missing)}")
         if args.grab_frame is not None or args.save_segments:
             sys.exit("--grab-frame and --save-segments need the source video.")
-        print(f"Rendering from the {len(segments)} saved clip segment(s) in {folder / 'segments'}"
-              + ("." if args.from_segments else f" (source video {args.video} not found)."))
+        why = ("." if args.from_segments or not args.video
+               else f" (source video {args.video} not found).")
+        print(f"Rendering from the {len(segments)} saved clip segment(s) in {folder / 'segments'}{why}")
     else:
         if not args.video:
             sys.exit("Give --video, --url, or a --clips-json that records one.")
@@ -558,10 +581,11 @@ def main(argv=None) -> None:
                       triage_model=args.triage_model, effort=args.effort,
                       streamer=args.streamer)
 
-    print(f"\n{len(clips)} clips selected:")
-    for i, c in enumerate(clips, 1):
-        print(f"  {i:2d}. [{c.score:.0f}/10] {fmt_srt_time(c.start)[:8]} "
-              f"({c.duration:.0f}s) {c.title}")
+    if not quiet:
+        print(f"\n{len(clips)} clips selected:")
+        for i, c in enumerate(clips, 1):
+            print(f"  {i:2d}. [{c.score:.0f}/10] {fmt_srt_time(c.start)[:8]} "
+                  f"({c.duration:.0f}s) {c.title}")
 
     if args.dry_run:
         if args.clips_json:  # nothing new was written; point at the file that exists
@@ -682,8 +706,9 @@ def main(argv=None) -> None:
         print("Fix the cause above and re-run; the saved clips are fine.")
     else:
         print(f"\nDone. {len(jobs)} clips in {dest}/ (details in {recipe})")
-    report_run(recipe, "render" if args.clips_json else "find+cut", len(saved))
-    if mode == "preview":
+    if not quiet:
+        report_run(recipe, "render" if args.clips_json else "find+cut", len(saved))
+    if mode == "preview" and not quiet:
         print(f"Review the previews in the web UI (python ui.py: Keep/Reject, then Render approved),\n"
               f"or delete the clips you don't want from clips.json and render\n"
               f"the keepers at full quality:  python clipper.py --clips-json {recipe}"
