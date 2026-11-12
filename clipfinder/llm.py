@@ -11,6 +11,7 @@ from typing import Callable
 
 from .clips import Clip
 from .signals import SIGNALS_HEADER
+from .stats import STATS
 from .transcript import Segment, format_segments, segments_between
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -139,9 +140,12 @@ def request_params(cfg: LLMConfig, model: str, user: str, schema: dict) -> dict:
 
 def send(client, cfg: LLMConfig, params: dict):
     if cfg.server_fallback and params["model"] in SERVER_FALLBACK_MODELS:
-        return client.beta.messages.create(**params, betas=[FALLBACK_BETA],
-                                           extra_body={"fallbacks": "default"})
-    return client.messages.create(**params)
+        msg = client.beta.messages.create(**params, betas=[FALLBACK_BETA],
+                                          extra_body={"fallbacks": "default"})
+    else:
+        msg = client.messages.create(**params)
+    STATS.add(msg)
+    return msg
 
 
 def parse_response(msg, label: str) -> dict | None:
@@ -261,6 +265,7 @@ def find_clips_batch(client, cfg: LLMConfig, model: str, chunks: list[list[Segme
         label = section_label(i, len(chunks), chunks[i - 1])
         try:
             if res.result.type == "succeeded":
+                STATS.add(res.result.message, batch=True)
                 data = finish(client, cfg, res.result.message, prompts[cid], CLIP_SCHEMA, label)
             else:
                 print(f"  {label}: batch result {res.result.type}, re-running directly")

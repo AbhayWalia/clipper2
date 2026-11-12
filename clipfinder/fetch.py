@@ -83,6 +83,14 @@ def download_chat(url: str, out: Path, progress_every: int = 5000) -> Path | Non
     return out
 
 
+def _download(yt_dlp, url: str, opts: dict) -> tuple[dict, Path]:
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        if info.get("_type") == "playlist":
+            raise SystemExit("That URL is a playlist/channel; give a single VOD or video URL.")
+        return info, Path(ydl.prepare_filename(info)).with_suffix("")
+
+
 def fetch_source(url: str, dest: Path, video: bool = True, captions: bool = True,
                  chat: bool = True, max_height: int = 1080) -> Fetched:
     try:
@@ -90,11 +98,16 @@ def fetch_source(url: str, dest: Path, video: bool = True, captions: bool = True
     except ImportError:
         raise SystemExit("--url needs yt-dlp:  pip install yt-dlp")
     dest.mkdir(parents=True, exist_ok=True)
-    with yt_dlp.YoutubeDL(ytdlp_options(dest, video, captions, max_height)) as ydl:
-        info = ydl.extract_info(url, download=True)
-        if info.get("_type") == "playlist":
-            raise SystemExit("That URL is a playlist/channel; give a single VOD or video URL.")
-        stem = Path(ydl.prepare_filename(info)).with_suffix("")
+    try:
+        info, stem = _download(yt_dlp, url, ytdlp_options(dest, video, captions, max_height))
+    except yt_dlp.utils.DownloadError as e:
+        # Captions are only a shortcut past Whisper. YouTube often rate-limits them
+        # (HTTP 429), so retry without them rather than failing the whole run.
+        if not captions or "subtitles" not in str(e):
+            raise
+        print(f"  captions download failed ({str(e).removeprefix('ERROR: ')}); "
+              "continuing without them, Whisper will transcribe instead")
+        info, stem = _download(yt_dlp, url, ytdlp_options(dest, video, False, max_height))
     video_path = None
     if video:
         for ext in (".mp4", ".mkv", ".webm"):

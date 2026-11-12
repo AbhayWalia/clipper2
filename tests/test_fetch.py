@@ -115,3 +115,33 @@ def test_chat_is_reused_and_failures_dont_block(tmp_path, monkeypatch):
             raise RuntimeError("chat API changed")
     monkeypatch.setitem(sys.modules, "chat_downloader", types.SimpleNamespace(ChatDownloader=Boom))
     assert fetch.download_chat("u", tmp_path / "y.chat.json") is None
+
+
+def test_rate_limited_captions_fall_back_to_whisper(tmp_path, monkeypatch):
+    """YouTube's HTTP 429 on captions mustn't fail the run: retry without them."""
+    class DownloadError(Exception):
+        pass
+
+    class RateLimitedYDL(FakeYDL):
+        def extract_info(self, url, download=True):
+            if self.last_opts["writesubtitles"]:
+                raise DownloadError("ERROR: Unable to download video subtitles for 'en': "
+                                    "HTTP Error 429: Too Many Requests")
+            (self.dest / "Twitch_v123.mp4").write_bytes(b"video")
+            return {"id": "v123", "ext": "mp4", "title": "t", "requested_subtitles": None}
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(
+        YoutubeDL=RateLimitedYDL, utils=types.SimpleNamespace(DownloadError=DownloadError)))
+    got = fetch.fetch_source("https://youtube.com/watch?v=x", tmp_path, chat=False)
+    assert got.video == tmp_path / "Twitch_v123.mp4"
+    assert got.captions is None          # cli.py then turns on Whisper
+    assert RateLimitedYDL.last_opts["writesubtitles"] is False
+
+    class BrokenYDL(FakeYDL):        # other download errors still stop the run
+        def extract_info(self, url, download=True):
+            raise DownloadError("ERROR: Video unavailable")
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(
+        YoutubeDL=BrokenYDL, utils=types.SimpleNamespace(DownloadError=DownloadError)))
+    import pytest
+    with pytest.raises(DownloadError):
+        fetch.fetch_source("https://youtube.com/watch?v=x", tmp_path, chat=False)

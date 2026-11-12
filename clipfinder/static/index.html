@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* shadcn/ui-style tokens (zinc), dark by default */
+  :root {
+    --bg: #09090b; --card: #0f0f12; --muted: #18181b; --border: #27272a; --input: #27272a;
+    --fg: #fafafa; --fg-muted: #a1a1aa; --fg-faint: #71717a;
+    --primary: #fafafa; --primary-fg: #18181b;
+    --accent: #8b5cf6; --accent-soft: rgba(139, 92, 246, .14);
+    --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444;
+    --radius: 10px; --shadow: 0 1px 2px rgba(0,0,0,.4);
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #fafafa; --card: #ffffff; --muted: #f4f4f5; --border: #e4e4e7; --input: #e4e4e7;
+      --fg: #09090b; --fg-muted: #52525b; --fg-faint: #a1a1aa;
+      --primary: #18181b; --primary-fg: #fafafa;
+      --accent-soft: rgba(139, 92, 246, .10); --shadow: 0 1px 2px rgba(0,0,0,.06);
+      color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font: 14px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2;
+          stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Header */
+  header {
+    position: sticky; top: 0; z-index: 10; height: 56px; padding: 0 24px;
+    display: flex; align-items: center; gap: 12px;
+    background: color-mix(in srgb, var(--bg) 80%, transparent); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; }
+  .logo-mark { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+               background: linear-gradient(135deg, #8b5cf6, #ec4899); color: white; }
+  .logo-mark svg { width: 15px; height: 15px; }
+  header .spacer { flex: 1; }
+
+  /* Layout */
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 24px; padding: 24px;
+         max-width: 1600px; margin: 0 auto; align-items: start; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 0 16px; } }
+  aside { position: sticky; top: 80px; display: flex; flex-direction: column; gap: 16px; }
+  @media (max-width: 960px) { aside { position: static; } }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+          box-shadow: var(--shadow); }
+  .card-h { padding: 18px 20px 0; }
+  .card-h h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .card-h p { margin: 2px 0 0; color: var(--fg-muted); font-size: 13px; }
+  .card-b { padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* Form controls */
+  label.f { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; }
+  label.f small { color: var(--fg-faint); font-weight: 400; }
+  .input, select.input, textarea.input {
+    height: 36px; width: 100%; padding: 0 12px; border-radius: 8px; border: 1px solid var(--input);
+    background: transparent; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  textarea.input { height: auto; min-height: 64px; padding: 8px 12px; resize: vertical; }
+  select.input { appearance: none; padding-right: 32px; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; }
+  select.input option { background: var(--card); }
+  .input:focus { border-color: var(--fg-faint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg-faint) 25%, transparent); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); padding: 3px; gap: 3px;
+          background: var(--muted); border-radius: 8px; }
+  .tabs button { height: 30px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+                 color: var(--fg-muted); font-size: 13px; font-weight: 500; display: flex;
+                 align-items: center; justify-content: center; gap: 6px; }
+  .tabs button[aria-selected="true"] { background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
+
+  .switches { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; }
+  .sw { display: flex; align-items: center; gap: 12px; padding: 10px 12px; cursor: pointer; }
+  .sw + .sw { border-top: 1px solid var(--border); }
+  .sw div { flex: 1; display: flex; flex-direction: column; }
+  .sw b { font-weight: 500; font-size: 13px; }
+  .sw small { color: var(--fg-faint); font-size: 12px; }
+  .sw input { appearance: none; width: 36px; height: 20px; border-radius: 99px; background: var(--input);
+              position: relative; cursor: pointer; transition: background .15s; flex: none; margin: 0; }
+  .sw input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                     border-radius: 50%; background: var(--bg); transition: transform .15s; box-shadow: var(--shadow); }
+  .sw input:checked { background: var(--primary); }
+  .sw input:checked::after { transform: translateX(16px); }
+
+  details.adv summary { cursor: pointer; color: var(--fg-muted); font-size: 13px; font-weight: 500;
+                        list-style: none; display: flex; align-items: center; gap: 6px; }
+  details.adv summary::-webkit-details-marker { display: none; }
+  details.adv summary svg { transition: transform .15s; }
+  details.adv[open] summary svg { transform: rotate(90deg); }
+  details.adv > div { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+
+  .btn { height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid transparent; cursor: pointer;
+         display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 500;
+         font-size: 13px; white-space: nowrap; transition: opacity .15s, background .15s; text-decoration: none; }
+  .btn-primary { background: var(--primary); color: var(--primary-fg); }
+  .btn-primary:hover { opacity: .9; }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-outline { background: transparent; border-color: var(--border); color: var(--fg); }
+  .btn-outline:hover { background: var(--muted); }
+  .btn-ghost { background: transparent; color: var(--fg-muted); padding: 0 10px; }
+  .btn-ghost:hover { background: var(--muted); color: var(--fg); }
+  .btn-sm { height: 30px; padding: 0 10px; font-size: 12px; }
+  .btn-block { width: 100%; }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px;
+           border-radius: 99px; font-size: 12px; font-weight: 500; border: 1px solid var(--border);
+           color: var(--fg-muted); white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+  .badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
+  .badge.run { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .badge.run .dot { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  .error { color: var(--bad); font-size: 13px; margin: -4px 0 0; }
+
+  /* Run log */
+  .log { font: 12px/1.6 "JetBrains Mono", ui-monospace, monospace; background: var(--bg);
+         border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; height: 240px;
+         overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--fg-muted); }
+  .log .hl { color: var(--fg); }
+  .log .err { color: var(--bad); }
+  .run-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+  .run-meta code { font-family: "JetBrains Mono", monospace; font-size: 11px; overflow: hidden;
+                   text-overflow: ellipsis; white-space: nowrap; flex: 1; color: var(--fg-faint); }
+
+  /* Library */
+  .lib-h { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .lib-h h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+  .lib-h p { margin: 2px 0 0; color: var(--fg-muted); font-size: 13px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  .chip { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent;
+          cursor: pointer; color: var(--fg-muted); font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .chip:hover { background: var(--muted); color: var(--fg); }
+  .chip[aria-pressed="true"] { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+  .chip span { font-size: 11px; opacity: .7; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+  .clip { overflow: hidden; display: flex; flex-direction: column; transition: border-color .15s; }
+  .clip:hover { border-color: color-mix(in srgb, var(--fg-faint) 60%, var(--border)); }
+  .player { position: relative; background: #000; aspect-ratio: 9 / 16; }
+  .player.wide { aspect-ratio: 16 / 9; }
+  .player video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .player .score { position: absolute; top: 10px; left: 10px; z-index: 1; pointer-events: none;
+                   background: rgba(0,0,0,.65); backdrop-filter: blur(6px); color: #fff; border-color: rgba(255,255,255,.15); }
+  .player .num { position: absolute; top: 10px; right: 10px; z-index: 1; pointer-events: none;
+                 background: rgba(0,0,0,.65); color: #fff; border-color: rgba(255,255,255,.15); }
+  .clip-b { padding: 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .clip-b h3 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.35; letter-spacing: -.01em; }
+  .hook { margin: 0; font-size: 13px; color: var(--fg-muted); }
+  .meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--fg-faint); }
+  .cat { background: var(--accent-soft); color: var(--accent); border-color: transparent; text-transform: capitalize; }
+  .clip-f { display: flex; gap: 6px; padding: 0 14px 14px; margin-top: auto; }
+  .clip-f .btn { flex: 1; }
+  .reason { font-size: 12px; color: var(--fg-muted); }
+  .reason summary { cursor: pointer; color: var(--fg-faint); }
+
+  .banner { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 16px;
+            border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-soft);
+            border-radius: var(--radius); font-size: 13px; }
+  .banner div { flex: 1; }
+  .banner b { display: block; font-weight: 600; }
+  .banner span { color: var(--fg-muted); }
+  .empty { border: 1px dashed var(--border); border-radius: var(--radius); padding: 64px 24px; text-align: center; color: var(--fg-muted); }
+  .empty svg { width: 32px; height: 32px; color: var(--fg-faint); margin-bottom: 8px; }
+  .empty h3 { margin: 0 0 4px; color: var(--fg); font-size: 15px; font-weight: 600; }
+  .empty p { margin: 0; font-size: 13px; }
+
+  /* Review */
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .toolbar .spacer { flex: 1; }
+  .seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--muted); border-radius: 8px; }
+  .seg button { height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+                color: var(--fg-muted); font-size: 12px; font-weight: 500; }
+  .seg button[aria-pressed="true"] { background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
+  .seg button span { opacity: .6; margin-left: 4px; }
+  .stat { font-size: 12px; color: var(--fg-muted); display: inline-flex; align-items: center; gap: 6px; }
+  .clip.approved { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
+  .clip.rejected { opacity: .45; }
+  .clip.rejected:hover { opacity: .8; }
+  .review { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .review .btn { width: 100%; }
+  .btn-approve[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .btn-reject[aria-pressed="true"] { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .trim { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 4px 6px; font-size: 12px; color: var(--fg-muted); }
+  .trim b { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; text-align: center; }
+  .trim .nudge { display: inline-flex; gap: 2px; }
+  .trim .nudge button { height: 24px; min-width: 34px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border);
+                        background: transparent; cursor: pointer; font-size: 11px; color: var(--fg-muted); }
+  .trim .nudge button:hover { background: var(--muted); color: var(--fg); }
+  .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+  .section-label { grid-column: 1 / -1; margin: 12px 0 -4px; font-size: 12px; font-weight: 500; color: var(--fg-faint);
+                   text-transform: uppercase; letter-spacing: .05em; }
+
+  /* Prompt dialog */
+  dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--fg); padding: 0;
+           width: min(820px, calc(100vw - 32px)); max-height: calc(100vh - 48px); box-shadow: 0 24px 64px rgba(0,0,0,.5); }
+  dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(2px); }
+  dialog form { display: flex; flex-direction: column; max-height: calc(100vh - 48px); }
+  .dlg-h { padding: 20px 24px 12px; display: flex; align-items: start; gap: 12px; }
+  .dlg-h div { flex: 1; }
+  .dlg-h h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .dlg-h p { margin: 4px 0 0; color: var(--fg-muted); font-size: 13px; }
+  .dlg-h code, .dlg-f code { font-family: "JetBrains Mono", monospace; font-size: 12px; background: var(--muted); padding: 1px 5px; border-radius: 4px; }
+  dialog textarea { margin: 0 24px; min-height: 360px; flex: 1; font: 12.5px/1.65 "JetBrains Mono", ui-monospace, monospace;
+                    padding: 14px; border-radius: 8px; border: 1px solid var(--input); background: var(--bg); resize: vertical; outline: none; }
+  dialog textarea:focus { border-color: var(--fg-faint); }
+  .dlg-f { padding: 14px 24px 20px; display: flex; gap: 8px; align-items: center; }
+  .dlg-f .spacer { flex: 1; }
+  .dlg-f small { color: var(--fg-faint); font-size: 12px; }
+
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translate(-50%, 20px); opacity: 0;
+           background: var(--primary); color: var(--primary-fg); padding: 10px 16px; border-radius: 8px;
+           font-size: 13px; font-weight: 500; transition: all .2s; pointer-events: none; z-index: 50; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 17h5M17 7h5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+  <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+</svg>
+
+<header>
+  <div class="logo">
+    <div class="logo-mark"><svg class="i"><use href="#i-scissors"/></svg></div>
+    Clipper
+  </div>
+  <div class="spacer"></div>
+  <button class="btn btn-ghost btn-sm" id="promptBtn" type="button"><svg class="i"><use href="#i-pen"/></svg>Prompt<span id="promptTag" class="badge" style="height:18px;font-size:11px" hidden>custom</span></button>
+  <span id="keyBadge" class="badge" hidden></span>
+</header>
+
+<main>
+  <aside>
+    <form class="card" id="runForm" autocomplete="off">
+      <div class="card-h">
+        <h2>New run</h2>
+        <p>Claude finds the best moments, ffmpeg cuts them.</p>
+      </div>
+      <div class="card-b">
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" data-source="url" aria-selected="true"><svg class="i"><use href="#i-link"/></svg>Link</button>
+          <button type="button" role="tab" data-source="video" aria-selected="false"><svg class="i"><use href="#i-file"/></svg>Video</button>
+          <button type="button" role="tab" data-source="rerender" aria-selected="false"><svg class="i"><use href="#i-refresh"/></svg>Re-render</button>
+        </div>
+
+        <div data-for="url">
+          <label class="f">Twitch VOD or YouTube link
+            <input class="input" name="url" placeholder="https://www.twitch.tv/videos/…">
+          </label>
+        </div>
+        <div data-for="video" hidden>
+          <label class="f">Video
+            <select class="input" name="video" id="videoSel"></select>
+          </label>
+        </div>
+        <div data-for="video" hidden>
+          <label class="f">Transcript <small>Leave on Whisper to transcribe automatically</small>
+            <select class="input" name="transcript" id="transcriptSel"></select>
+          </label>
+        </div>
+        <div data-for="rerender" hidden>
+          <label class="f">Clip list <small>Re-cut a saved clips.json with new settings, no AI cost</small>
+            <select class="input" name="clips_json" id="recipeSel"></select>
+          </label>
+        </div>
+
+        <div class="switches">
+          <label class="sw"><div><b>Vertical 9:16</b><small>For TikTok, Shorts and Reels</small></div><input type="checkbox" name="vertical" checked></label>
+          <label class="sw"><div><b>Burn in captions</b><small>Word-by-word, TikTok style</small></div><input type="checkbox" name="burn_captions" checked></label>
+          <label class="sw"><div><b>Hook banner</b><small>Big text for the first 3 seconds</small></div><input type="checkbox" name="hook_overlay"></label>
+          <label class="sw"><div><b>Quick previews</b><small>480p drafts first, render keepers later</small></div><input type="checkbox" name="preview"></label>
+        </div>
+
+        <details class="adv">
+          <summary><svg class="i"><use href="#i-chev"/></svg>More options</summary>
+          <div>
+            <label class="f" data-ai>Notes for Claude
+              <textarea class="input" name="context" placeholder="e.g. Streamer is doing the first heist mission"></textarea>
+            </label>
+            <div class="row">
+              <label class="f">Streamer layout
+                <select class="input" name="streamer" id="streamerSel"></select>
+              </label>
+              <label class="f">Output folder
+                <input class="input" name="out" value="clips">
+              </label>
+            </div>
+            <div class="row" data-ai>
+              <label class="f">Max clips <input class="input" name="top" type="number" min="0" value="15"></label>
+              <label class="f">Min score <input class="input" name="min_score" type="number" min="0" max="10" step="0.5" value="6"></label>
+            </div>
+            <div class="row" data-ai>
+              <label class="f">Min length (s) <input class="input" name="min_len" type="number" min="1" value="12"></label>
+              <label class="f">Max length (s) <input class="input" name="max_len" type="number" min="1" value="75"></label>
+            </div>
+            <div class="row">
+              <label class="f">Lead-in (s) <input class="input" name="pad_before" type="number" min="0" step="0.5" value="1.5"></label>
+              <label class="f">Tail (s) <input class="input" name="pad_after" type="number" min="0" step="0.5" value="1.5"></label>
+            </div>
+            <label class="f" data-ai>Effort
+              <select class="input" name="effort">
+                <option value="low">Low: fastest, cheapest</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High: most thorough</option>
+              </select>
+            </label>
+            <div class="switches" data-ai>
+              <label class="sw"><div><b>Sound detection</b><small>Hear laughs, gunfire, explosions, sirens (free, on your Mac)</small></div><input type="checkbox" name="sound_tags" checked></label>
+              <label class="sw"><div><b>Batch API</b><small>Half price, can take minutes to hours</small></div><input type="checkbox" name="batch"></label>
+              <label class="sw"><div><b>Find only</b><small>Pick clips without cutting video</small></div><input type="checkbox" name="dry_run"></label>
+            </div>
+          </div>
+        </details>
+
+        <p class="error" id="formError" hidden></p>
+        <button class="btn btn-primary btn-block" id="runBtn" type="submit">
+          <svg class="i"><use href="#i-sparkles"/></svg><span>Find clips</span>
+        </button>
+      </div>
+    </form>
+
+    <section class="card" id="runCard" hidden>
+      <div class="card-h" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <h2>Run</h2>
+        <span id="runBadge" class="badge"></span>
+      </div>
+      <div class="card-b">
+        <div class="run-meta"><svg class="i"><use href="#i-clock"/></svg><span id="runTime"></span><code id="runCmd"></code></div>
+        <div class="log" id="log"></div>
+        <button class="btn btn-outline btn-sm" id="stopBtn" type="button"><svg class="i"><use href="#i-stop"/></svg>Stop</button>
+      </div>
+    </section>
+  </aside>
+
+  <section>
+    <div class="lib-h">
+      <div>
+        <h1>Clips</h1>
+        <p id="libSummary">Loading…</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="reloadBtn" type="button"><svg class="i"><use href="#i-refresh"/></svg>Refresh</button>
+    </div>
+    <div class="chips" id="folders"></div>
+    <div class="toolbar" id="toolbar" hidden>
+      <div class="seg" id="filter">
+        <button type="button" data-f="all" aria-pressed="true">All<span></span></button>
+        <button type="button" data-f="todo" aria-pressed="false">To review<span></span></button>
+        <button type="button" data-f="approved" aria-pressed="false">Approved<span></span></button>
+        <button type="button" data-f="rejected" aria-pressed="false">Rejected<span></span></button>
+      </div>
+      <span class="stat" id="costStat" hidden></span>
+      <div class="spacer"></div>
+      <button class="btn btn-primary btn-sm" id="renderApproved" type="button" hidden><svg class="i"><use href="#i-scissors"/></svg><span></span></button>
+    </div>
+    <div class="banner" id="uncut" hidden>
+      <svg class="i"><use href="#i-scissors"/></svg>
+      <div><b id="uncutTitle"></b><span>Uses the switches on the left. No AI cost, just ffmpeg.</span></div>
+      <button class="btn btn-primary btn-sm" id="cutBtn" type="button">Cut them now</button>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" hidden>
+      <svg class="i"><use href="#i-film"/></svg>
+      <h3>No clips yet</h3>
+      <p>Paste a stream link or pick a video on the left to find your first clips.</p>
+    </div>
+  </section>
+</main>
+
+<dialog id="promptDlg">
+  <form method="dialog" id="promptForm">
+    <div class="dlg-h">
+      <div>
+        <h2>Clip-finding prompt</h2>
+        <p>What Claude looks for in every stream. Edit it to teach the clipper new slang, characters, places or what your audience likes.
+           <code>{min_len}</code> and <code>{max_len}</code> are filled in from your length settings.</p>
+      </div>
+      <span class="badge" id="promptState"></span>
+    </div>
+    <textarea id="promptText" spellcheck="false"></textarea>
+    <div class="dlg-f">
+      <button class="btn btn-ghost btn-sm" type="button" id="promptReset">Reset to default</button>
+      <small id="promptMsg"></small>
+      <div class="spacer"></div>
+      <button class="btn btn-outline btn-sm" type="button" id="promptCancel">Cancel</button>
+      <button class="btn btn-primary btn-sm" type="button" id="promptSave">Save prompt</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtTime = t => { t = Math.max(0, Math.round(t)); const h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = t%60;
+  return (h ? h + ":" + String(m).padStart(2,"0") : m) + ":" + String(s).padStart(2,"0"); };
+const fmtSize = b => b > 1e9 ? (b/1e9).toFixed(1) + " GB" : (b/1e6).toFixed(b > 1e7 ? 0 : 1) + " MB";
+const media = p => "/media/" + p.split("/").map(encodeURIComponent).join("/");
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+// ---------- Form ----------
+let source = "url";
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  source = b.dataset.source;
+  document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
+  document.querySelectorAll("[data-for]").forEach(el => el.hidden = el.dataset.for !== source);
+  document.querySelectorAll("[data-ai]").forEach(el => el.hidden = source === "rerender");
+  updateRunLabel();
+}));
+function updateRunLabel() {
+  const findOnly = $("[name=dry_run]").checked;
+  $("#runBtn span").textContent = source === "rerender" ? "Render clips"
+    : findOnly ? "Find clips only (no video)" : "Find & cut clips";
+}
+$("[name=dry_run]").addEventListener("change", updateRunLabel);
+updateRunLabel();
+
+function fillSelect(sel, items, empty) {
+  const keep = sel.value;
+  sel.innerHTML = items.length || empty ? (empty ? `<option value="">${esc(empty)}</option>` : "") +
+    items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")
+    : `<option value="">Nothing found in the project folder</option>`;
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+}
+
+async function loadInputs() {
+  const d = await (await fetch("/api/inputs")).json();
+  fillSelect($("#videoSel"), d.videos.map(v => [v.path, `${v.path}  ·  ${fmtSize(v.size)}`]));
+  fillSelect($("#transcriptSel"), d.transcripts.map(t => [t, t]), "Transcribe with Whisper");
+  fillSelect($("#streamerSel"), d.streamers.map(s => [s, s]), "None (centre crop)");
+  const k = $("#keyBadge"); k.hidden = false;
+  k.className = "badge " + (d.api_key ? "ok" : "bad");
+  k.innerHTML = `<span class="dot"></span>${d.api_key ? "API key loaded" : "No ANTHROPIC_API_KEY"}`;
+  k.title = d.api_key ? "" : "Set ANTHROPIC_API_KEY or put it in .env, then restart the UI";
+}
+
+function formData() {
+  const data = { source };
+  for (const el of $("#runForm").elements) {
+    if (!el.name || el.closest("[hidden]")) continue;
+    data[el.name] = el.type === "checkbox" ? el.checked : el.value;
+  }
+  return data;
+}
+
+async function startRun(data) {
+  const err = $("#formError"); err.hidden = true;
+  const res = await fetch("/api/run", { method: "POST", body: JSON.stringify(data) });
+  const body = await res.json();
+  if (!res.ok) { err.textContent = body.error; err.hidden = false; toast(body.error); return; }
+  logLines = 0; $("#log").innerHTML = "";
+  showJob(body); poll();
+  $("#runCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+$("#runForm").addEventListener("submit", e => { e.preventDefault(); startRun(formData()); });
+
+// ---------- Run ----------
+let logLines = 0, polling = false, lastOut = null;
+
+function showJob(j) {
+  if (!j) return;
+  $("#runCard").hidden = false;
+  const b = $("#runBadge");
+  if (j.running) { b.className = "badge run"; b.innerHTML = `<span class="dot"></span>Running`; }
+  else if (j.code === 0) { b.className = "badge ok"; b.innerHTML = `<span class="dot"></span>Done`; }
+  else { b.className = "badge bad"; b.innerHTML = `<span class="dot"></span>${j.code < 0 ? "Stopped" : "Failed"}`; }
+  $("#runCmd").textContent = j.cmd; $("#runCmd").title = j.cmd;
+  $("#runTime").textContent = fmtTime(((j.ended || Date.now()/1000) - j.started));
+  $("#stopBtn").hidden = !j.running;
+  $("#runBtn").disabled = j.running;
+  const log = $("#log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  for (const line of j.lines) {
+    const div = document.createElement("div");
+    if (/error|traceback|failed|not found|declined/i.test(line)) div.className = "err";
+    else if (/^\s*(\d+\.|saved|done|loaded|time:|claude:)/i.test(line)) div.className = "hl";
+    div.textContent = line || " ";
+    log.appendChild(div);
+  }
+  logLines = j.total;
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  lastOut = j.out;
+}
+
+async function poll() {
+  if (polling) return;
+  polling = true;
+  let seenSaved = 0;
+  try {
+    while (true) {
+      const j = await (await fetch("/api/job?since=" + logLines)).json();
+      if (!j) break;
+      showJob(j);
+      const saved = j.lines.filter(l => /saved .*\.mp4/.test(l)).length;
+      if (saved) { seenSaved += saved; loadLibrary(j.out); }
+      if (!j.running) { loadLibrary(j.out); loadInputs(); break; }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  } finally { polling = false; }
+}
+
+$("#stopBtn").addEventListener("click", () => fetch("/api/stop", { method: "POST", body: "{}" }));
+
+// ---------- Library ----------
+let folders = [], current = null;
+
+async function loadLibrary(prefer) {
+  folders = await (await fetch("/api/library")).json();
+  const names = folders.map(f => f.name);
+  if (prefer && names.includes(prefer.replace(/\/+$/, "").split("/").pop())) current = prefer.replace(/\/+$/, "").split("/").pop();
+  if (!names.includes(current)) current = names[0] ?? null;
+  fillSelect($("#recipeSel"), folders.filter(f => f.recipe).map(f => [f.recipe, f.recipe]));
+  renderFolders(); renderGrid();
+}
+
+function renderFolders() {
+  $("#folders").innerHTML = folders.map(f =>
+    `<button class="chip" aria-pressed="${f.name === current}" data-name="${esc(f.name)}">${esc(f.name)}<span>${f.clips.length}</span></button>`).join("");
+  document.querySelectorAll(".chip").forEach(c => c.onclick = () => { current = c.dataset.name; renderFolders(); renderGrid(); });
+  const total = folders.reduce((n, f) => n + f.clips.length, 0);
+  $("#libSummary").textContent = folders.length
+    ? `${total} clip${total === 1 ? "" : "s"} across ${folders.length} folder${folders.length === 1 ? "" : "s"}`
+    : "Your clips will show up here.";
+}
+
+let filter = "all";
+document.querySelectorAll("#filter button").forEach(b => b.addEventListener("click", () => {
+  filter = b.dataset.f; renderGrid();
+}));
+const fmtUsd = d => d < 0.01 ? "<$0.01" : "$" + d.toFixed(2);
+const fmtDur = s => s < 60 ? Math.round(s) + "s" : Math.floor(s/60) + "m " + String(Math.round(s%60)).padStart(2,"0") + "s";
+
+function renderGrid() {
+  const f = folders.find(x => x.name === current);
+  const all = f ? f.clips : [];
+  const review = !!f?.recipe && all.some(c => c.matched);
+  const counts = { all: all.filter(c => c.matched).length, todo: all.filter(c => c.matched && !c.review).length,
+                   approved: all.filter(c => c.review === "approved").length, rejected: all.filter(c => c.review === "rejected").length };
+  $("#toolbar").hidden = !f?.recipe;
+  $("#filter").hidden = !review;
+  document.querySelectorAll("#filter button").forEach(b => {
+    b.setAttribute("aria-pressed", b.dataset.f === filter);
+    b.querySelector("span").textContent = counts[b.dataset.f];
+  });
+  const cost = $("#costStat");
+  cost.hidden = f?.cost == null && !f?.last_run;
+  if (!cost.hidden) {
+    const lr = f.last_run, secs = lr ? Object.values(lr.seconds || {}).reduce((a, b) => a + b, 0) : 0;
+    cost.innerHTML = `<svg class="i"><use href="#i-dollar"/></svg>` +
+      (f.cost != null ? `${fmtUsd(f.cost)} spent` + (counts.all ? ` · ${fmtUsd(f.cost / counts.all)}/clip` : "") : "") +
+      (lr ? ` · last run ${fmtDur(secs)}` : "");
+    cost.title = lr ? Object.entries(lr.seconds || {}).map(([k, v]) => `${k}: ${fmtDur(v)}`).join("\n") +
+      (lr.tokens ? `\n${(lr.tokens.input + lr.tokens.cache_read + lr.tokens.cache_write).toLocaleString()} input / ${lr.tokens.output.toLocaleString()} output tokens` : "") : "";
+  }
+  const ra = $("#renderApproved");
+  ra.hidden = !f?.approved?.length;
+  if (f?.approved?.length) ra.querySelector("span").textContent = `Render ${f.approved.length} approved`;
+
+  const fl = review ? filter : "all";
+  const keep = c => fl === "all" || (c.matched && (fl === "todo" ? !c.review : c.review === fl));
+  const matched = all.filter(c => c.matched && keep(c)).sort((a, b) => a.n - b.n);
+  const others = all.filter(c => !c.matched && keep(c));
+  const clips = [...matched, ...others];
+  $("#empty").hidden = all.length > 0 || !!f?.uncut;
+  $("#uncut").hidden = !f?.uncut;
+  if (f?.uncut) $("#uncutTitle").textContent =
+    `${f.uncut} clip${f.uncut === 1 ? "" : "s"} found but not ${clips.some(c => c.preview) ? "rendered at full quality" : "cut"} yet`;
+  const grid = $("#grid");
+  // Keep players that are already on the page so a refresh doesn't stop playback.
+  const existing = new Map([...grid.querySelectorAll("article")].map(el => [el.dataset.file, el]));
+  const cards = matched.map(c => { const el = existing.get(c.file) || clipCard(c, f); el.update(c); return el; });
+  if (others.length) {
+    const label = document.createElement("div");
+    label.className = "section-label";
+    label.textContent = matched.length ? "Older videos in this folder (not in the current clip list)" : "Videos";
+    cards.push(...(matched.length ? [label] : []), ...others.map(c => { const el = existing.get(c.file) || clipCard(c, f); el.update(c); return el; }));
+  }
+  grid.replaceChildren(...cards);
+}
+
+async function saveClip(f, n, change) {
+  const res = await fetch("/api/clip", { method: "POST", body: JSON.stringify({ recipe: f.recipe, n, ...change }) });
+  const body = await res.json();
+  if (!res.ok) { toast(body.error); return; }
+  await loadLibrary();
+}
+
+$("#renderApproved").addEventListener("click", () => {
+  const f = folders.find(x => x.name === current);
+  if (!f?.approved?.length) return;
+  startRun({ ...formData(), source: "rerender", clips_json: f.recipe, only: f.approved, preview: false, dry_run: false });
+});
+
+function clipCard(c, folder) {
+  const el = document.createElement("article");
+  el.className = "card clip"; el.dataset.file = c.file;
+  const len = c.start != null && c.end != null ? c.end - c.start : null;
+  el.innerHTML = `
+    <div class="player">
+      ${c.score != null ? `<span class="badge score">★ ${Number(c.score).toFixed(0)}/10</span>` : ""}
+      <span class="badge num">#${c.n}${c.preview ? " · preview" : ""}</span>
+      <video src="${media(c.file)}" controls playsinline preload="metadata"></video>
+    </div>
+    <div class="clip-b">
+      <h3>${esc(c.title)}</h3>
+      ${c.hook ? `<p class="hook">“${esc(c.hook.replace(/^["“'\s]+|["”'\s]+$/g, ""))}”</p>` : ""}
+      <div class="meta">
+        ${c.category ? `<span class="badge cat">${esc(c.category)}</span>` : ""}
+        ${c.start != null ? `<span>${fmtTime(c.start)} → ${fmtTime(c.end)}</span><span>·</span><span class="len">${Math.round(len)}s</span>` : `<span class="len"></span>`}
+        <span>${fmtSize(c.size)}</span>
+      </div>
+      ${c.reason ? `<details class="reason"><summary>Why Claude picked it</summary>${esc(c.reason)}</details>` : ""}
+      ${c.matched ? `
+      <div class="trim">
+        <span>Start</span><b data-v="start"></b><span class="nudge"><button type="button" data-k="start" data-d="-1">−1s</button><button type="button" data-k="start" data-d="1">+1s</button></span>
+        <span>End</span><b data-v="end"></b><span class="nudge"><button type="button" data-k="end" data-d="-1">−1s</button><button type="button" data-k="end" data-d="1">+1s</button></span>
+      </div>
+      <span class="badge warn" data-stale hidden>Trimmed · render again to see it</span>
+      <div class="review">
+        <button class="btn btn-outline btn-sm btn-approve" type="button" data-review="approved"><svg class="i"><use href="#i-check"/></svg>Keep</button>
+        <button class="btn btn-outline btn-sm btn-reject" type="button" data-review="rejected"><svg class="i"><use href="#i-x"/></svg>Reject</button>
+      </div>` : ""}
+    </div>
+    <div class="clip-f">
+      <a class="btn btn-outline btn-sm" href="${media(c.file)}?download" download><svg class="i"><use href="#i-download"/></svg>Download</a>
+      ${c.hook || c.title ? `<button class="btn btn-ghost btn-sm" type="button" data-copy><svg class="i"><use href="#i-copy"/></svg>Copy caption</button>` : ""}
+    </div>`;
+  const v = el.querySelector("video");
+  v.addEventListener("loadedmetadata", () => {
+    if (v.videoWidth > v.videoHeight) el.querySelector(".player").classList.add("wide");
+    // The cut includes the lead-in/tail padding, so show the length you'll actually post.
+    if (isFinite(v.duration)) el.querySelector(".len").textContent = Math.round(v.duration) + "s";
+  });
+  // One video playing at a time.
+  v.addEventListener("play", () => document.querySelectorAll("video").forEach(o => o !== v && o.pause()));
+  let state = c;
+  el.update = c2 => {
+    state = c2;
+    el.classList.toggle("approved", c2.review === "approved");
+    el.classList.toggle("rejected", c2.review === "rejected");
+    el.querySelectorAll("[data-review]").forEach(b => b.setAttribute("aria-pressed", b.dataset.review === c2.review));
+    if (c2.start != null) {
+      el.querySelector('[data-v="start"]') && (el.querySelector('[data-v="start"]').textContent = fmtTime(c2.start));
+      el.querySelector('[data-v="end"]') && (el.querySelector('[data-v="end"]').textContent = fmtTime(c2.end));
+    }
+    const st = el.querySelector("[data-stale]"); if (st) st.hidden = !c2.stale;
+  };
+  el.querySelectorAll("[data-review]").forEach(b => b.addEventListener("click", () => {
+    const f = folders.find(x => x.name === current);
+    saveClip(f, state.n, { review: state.review === b.dataset.review ? null : b.dataset.review });
+  }));
+  el.querySelectorAll("[data-k]").forEach(b => b.addEventListener("click", () => {
+    const f = folders.find(x => x.name === current);
+    saveClip(f, state.n, { ["nudge_" + b.dataset.k]: Number(b.dataset.d) });
+  }));
+  el.querySelector("[data-copy]")?.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(c.hook || c.title);
+    toast("Caption copied");
+  });
+  return el;
+}
+
+$("#cutBtn").addEventListener("click", () => {
+  const f = folders.find(x => x.name === current);
+  if (!f?.recipe) return;
+  document.querySelector('.tabs [data-source="rerender"]').click();
+  $("#recipeSel").value = f.recipe;
+  $("[name=preview]").checked = false;
+  $("#runForm").requestSubmit();
+});
+
+let promptData = null;
+async function loadPrompt() {
+  promptData = await (await fetch("/api/prompt")).json();
+  $("#promptTag").hidden = !promptData.custom;
+}
+function showPromptState() {
+  const st = $("#promptState");
+  st.className = "badge " + (promptData.custom ? "ok" : "");
+  st.textContent = promptData.custom ? `Custom · ${promptData.file}` : "Default";
+}
+$("#promptBtn").addEventListener("click", async () => {
+  await loadPrompt();
+  $("#promptText").value = promptData.text; $("#promptMsg").textContent = "";
+  showPromptState();
+  $("#promptDlg").showModal();
+});
+$("#promptCancel").addEventListener("click", () => $("#promptDlg").close());
+async function postPrompt(body, msg) {
+  const res = await fetch("/api/prompt", { method: "POST", body: JSON.stringify(body) });
+  const d = await res.json();
+  if (!res.ok) { $("#promptMsg").textContent = d.error; return; }
+  promptData = d; $("#promptText").value = d.text; $("#promptTag").hidden = !d.custom;
+  showPromptState(); toast(msg);
+}
+$("#promptSave").addEventListener("click", async () => {
+  const text = $("#promptText").value;
+  if (text.trim() === promptData.default.trim() && !promptData.custom) { $("#promptDlg").close(); return; }
+  await postPrompt({ text }, "Prompt saved. New runs will use it.");
+  if (!$("#promptMsg").textContent) $("#promptDlg").close();
+});
+$("#promptReset").addEventListener("click", () => {
+  if (confirm("Go back to the built-in prompt? Your edits will be deleted.")) postPrompt({ reset: true }, "Back to the default prompt");
+});
+$("#promptText").addEventListener("input", () => {
+  const t = $("#promptText").value;
+  $("#promptMsg").textContent = /\{min_len\}|\{max_len\}/.test(t) ? "" : "Tip: keep {min_len} and {max_len} so length settings still apply";
+});
+
+$("#reloadBtn").addEventListener("click", () => { loadLibrary(); loadInputs(); });
+
+// ---------- Start ----------
+(async () => {
+  await Promise.all([loadInputs(), loadLibrary(), loadPrompt()]);
+  const j = await (await fetch("/api/job")).json();
+  if (j) { showJob(j); if (j.running) poll(); }
+})();
+</script>
+</body>
+</html>

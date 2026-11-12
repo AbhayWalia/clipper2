@@ -23,8 +23,8 @@ from .transcript import Segment, ts_to_seconds
 class Event:
     start: float
     end: float
-    kind: str      # "audio" or "chat"
-    strength: float  # audio: dB above normal; chat: x normal rate
+    kind: str      # "audio", "chat" or "sound" (see sounds.py)
+    strength: float  # audio: dB above normal; chat: x normal rate; sound: 0-1 likelihood
     detail: str = ""
 
 
@@ -179,6 +179,9 @@ def describe(e: Event, segs: list[Segment]) -> str:
     if e.kind == "audio":
         quiet = "" if has_speech(segs, e.start, e.end) else " (no speech)"
         return f"{rng} audio spike, {e.strength:+.0f} dB above normal{quiet}"
+    if e.kind == "sound":
+        quiet = "" if has_speech(segs, e.start, e.end) else " (no speech)"
+        return f"{rng} sounds like {e.detail} ({e.strength:.0%} likely){quiet}"
     detail = f": {e.detail}" if e.detail else ""
     return f"{rng} chat burst, {e.strength:.1f}x normal rate{detail}"
 
@@ -198,14 +201,24 @@ class Signals:
         inside = [e for e in self.events if e.end > t0 and e.start < t1]
         if not inside:
             return ""
-        # Keep the strongest of each kind if there are too many, then show in time order.
-        inside.sort(key=lambda e: e.strength, reverse=True)
-        keep = sorted(inside[:self.per_range], key=lambda e: e.start)
+        # Too many? Take the strongest of each kind in turn (strengths aren't comparable
+        # across kinds: dB vs chat ratio vs likelihood), then show them in time order.
+        by_kind: dict[str, list[Event]] = {}
+        for e in sorted(inside, key=lambda e: e.strength, reverse=True):
+            by_kind.setdefault(e.kind, []).append(e)
+        keep, queues = [], list(by_kind.values())
+        while len(keep) < self.per_range and any(queues):
+            for q in queues:
+                if q and len(keep) < self.per_range:
+                    keep.append(q.pop(0))
+        keep.sort(key=lambda e: e.start)
         return "\n".join(describe(e, self.segs) for e in keep)
 
 
 SIGNALS_HEADER = """Other signals for this section. The transcript only has speech, so these catch \
-moments it misses: an audio spike is a sudden loud moment in the game or the room, a chat \
-burst is viewers reacting. A strong spike or burst with little speech can still be a great \
+moments it misses: an audio spike is a sudden loud moment in the game or the room, \
+"sounds like" is what a sound model heard (laughter, screaming, gunfire, explosions, sirens, \
+crashes, tyre squeals), a chat burst is viewers reacting. Sound labels are probabilities \
+from game audio mixed with voice, so treat them as hints. A strong spike or burst with little speech can still be a great \
 clip; start it a few seconds before the signal so the build-up is included. Chat reacts \
 5-15 seconds after the moment."""

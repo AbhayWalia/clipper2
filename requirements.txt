@@ -5,3 +5,6 @@ imageio-ffmpeg>=0.6
 # Optional, only needed for --transcribe (pick one):
 # mlx-whisper      # Apple Silicon GPU
 # faster-whisper>=1.0
+# Optional, labels sounds (laughter, gunfire, explosions, sirens) as clip signals.
+# The ~330 MB model downloads to ~/panns_data on first use.
+# panns-inference
