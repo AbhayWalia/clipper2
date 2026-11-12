@@ -40,6 +40,7 @@ KEEP = 900.0        # recording kept behind the newest analysed second
 POLL = 2.0
 MAX_RESTARTS = 5
 SPIKE_SOUNDS = {"screaming", "laughter", "explosion", "cheering", "crash"}
+UI_FIELDS = ("review", "original_start", "original_end", "edited_at")  # set by the web UI
 
 
 @dataclass
@@ -128,8 +129,10 @@ class Recorder:
             self.t0 = time.time()
         run = len(self.runs)
         self.runs.append((run, time.time() - self.t0))
+        # stdout to DEVNULL: ffmpeg mustn't hold the web UI's log pipe open after we exit.
         self.proc = subprocess.Popen(record_cmd(src, folder, run, self.file_input, self.readrate),
-                                     stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.PIPE, text=True)
 
     def chunks(self) -> list[Chunk]:
         out = []
@@ -340,6 +343,7 @@ class LiveSession:
         audio.unlink(missing_ok=True)
         self.done.update(c.file for c in block)
         self.analysed = max(self.analysed, t1)
+        self.save()  # also the heartbeat the web UI watches
         print(f"[{fmt_clock(t1)}] transcribed {t1 - t0:.0f}s: {len(segs)} line(s)")
 
     def events(self) -> list:
@@ -457,16 +461,33 @@ class LiveSession:
                 c.file.unlink(missing_ok=True)
 
     def save(self) -> None:
-        from .clips import save_manifest
-        runs = []
+        """Write clips.json, keeping what the web UI changed in it meanwhile (Keep/Reject,
+        trims), since you can review clips while the stream is still on."""
+        from dataclasses import asdict
+        from .clips import write_json
+        disk: dict = {}
         if self.recipe.exists():
-            runs = json.loads(self.recipe.read_text(encoding="utf-8")).get("runs") or []
-        save_manifest(self.recipe, self.clips, video=None, transcript=self.transcript.resolve(),
-                      model=self.args.model, effort=self.args.effort, streamer=self.args.streamer,
-                      segments=self.segments, runs=runs,
-                      live={"source": self.args.live, "status": self.status,
-                            "analysed": round(self.analysed, 1),
-                            "updated": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            try:
+                disk = json.loads(self.recipe.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+        old = disk.get("clips") or []
+        clips = []
+        for i, c in enumerate(self.clips):
+            o = old[i] if i < len(old) else {}
+            if o.get("edited_at"):  # trimmed in the UI
+                c.start, c.end = o["start"], o["end"]
+            d = asdict(c)
+            d.update({k: o[k] for k in UI_FIELDS if k in o})
+            clips.append(d)
+        write_json(self.recipe, {
+            "video": None, "transcript": str(self.transcript.resolve()), "model": self.args.model,
+            "effort": self.args.effort, "streamer": self.args.streamer, "segments": self.segments,
+            "runs": disk.get("runs") or [],
+            "live": {"source": self.args.live, "status": self.status,
+                     "analysed": round(self.analysed, 1),
+                     "updated": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+            "clips": clips})
 
     # --- the loop -------------------------------------------------------------
     def step(self, rec: Recorder, final: bool) -> None:
@@ -478,8 +499,12 @@ class LiveSession:
             if not final:
                 break  # keep up: one block per tick, look at Claude in between
         if self.should_look(final):
-            with STATS.stage("find clips"):
-                numbers = self.look(final)
+            try:
+                with STATS.stage("find clips"):
+                    numbers = self.look(final)
+            except Exception as e:  # a hiccup mustn't end a long session; next look retries
+                print(f"  checking for clips failed ({type(e).__name__}: {e}); will try again")
+                numbers = []
             if numbers and not self.args.dry_run:
                 self.cut(numbers, rec.chunks())
         self.prune(chunks)
@@ -494,9 +519,15 @@ def session_name(source: str, info: dict) -> str:
 def run_live(args) -> None:
     from .cli import report_run
     from .fetch import streamer_slug
+    import os
     import shutil
     if not shutil.which("ffmpeg"):
         raise SystemExit("ffmpeg isn't installed or isn't on your PATH.")
+    if not os.environ.get("ANTHROPIC_API_KEY"):  # fail now, not at the first look minutes in
+        raise SystemExit("Live mode needs ANTHROPIC_API_KEY (set it, or put it in .env).")
+    # Ctrl+C (or Stop in the web UI) must reach us even if we were started with it ignored,
+    # as programs launched in the background are: it's how a session wraps up properly.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
 
     file_input = Path(args.live).exists()
     info = {} if file_input else resolve_stream(args.live, args.max_height)[1]

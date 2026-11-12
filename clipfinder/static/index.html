@@ -78,7 +78,7 @@
   .input:focus { border-color: var(--fg-faint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg-faint) 25%, transparent); }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
-  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); padding: 3px; gap: 3px;
+  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); padding: 3px; gap: 3px;
           background: var(--muted); border-radius: 8px; }
   .tabs button { height: 30px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
                  color: var(--fg-muted); font-size: 13px; font-weight: 500; display: flex;
@@ -126,6 +126,9 @@
   .badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
   .badge.run { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
   .badge.run .dot { animation: pulse 1.2s infinite; }
+  .badge.live { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+  .badge.live .dot, .chip .live-dot { animation: pulse 1.2s infinite; }
+  .chip .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
   @keyframes pulse { 50% { opacity: .3; } }
 
   .error { color: var(--bad); font-size: 13px; margin: -4px 0 0; }
@@ -177,6 +180,13 @@
   .banner div { flex: 1; }
   .banner b { display: block; font-weight: 600; }
   .banner span { color: var(--fg-muted); }
+  .banner.live { border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+                 background: color-mix(in srgb, var(--bad) 8%, transparent); }
+  .banner.live > svg { color: var(--bad); }
+  .live-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .live-stats div { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .live-stats b { display: block; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .live-stats span { font-size: 11px; color: var(--fg-faint); }
   .empty { border: 1px dashed var(--border); border-radius: var(--radius); padding: 64px 24px; text-align: center; color: var(--fg-muted); }
   .empty svg { width: 32px; height: 32px; color: var(--fg-faint); margin-bottom: 8px; }
   .empty h3 { margin: 0 0 4px; color: var(--fg); font-size: 15px; font-weight: 600; }
@@ -249,6 +259,7 @@
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
   <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
   <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
 </svg>
 
@@ -273,7 +284,8 @@
         <div class="tabs" role="tablist">
           <button type="button" role="tab" data-source="url" aria-selected="true"><svg class="i"><use href="#i-link"/></svg>Link</button>
           <button type="button" role="tab" data-source="video" aria-selected="false"><svg class="i"><use href="#i-file"/></svg>Video</button>
-          <button type="button" role="tab" data-source="rerender" aria-selected="false"><svg class="i"><use href="#i-refresh"/></svg>Re-render</button>
+          <button type="button" role="tab" data-source="live" aria-selected="false"><svg class="i"><use href="#i-radio"/></svg>Live</button>
+          <button type="button" role="tab" data-source="rerender" aria-selected="false"><svg class="i"><use href="#i-refresh"/></svg>Render</button>
         </div>
 
         <div data-for="url">
@@ -293,6 +305,24 @@
           <label class="f">Transcript <small>Leave on Whisper to transcribe automatically</small>
             <select class="input" name="transcript" id="transcriptSel"></select>
           </label>
+        </div>
+        <div data-for="live" hidden>
+          <label class="f">Live channel <small>Clips appear a few minutes after each moment while the stream is on</small>
+            <input class="input" name="live_url" placeholder="https://www.twitch.tv/name">
+          </label>
+        </div>
+        <div data-for="live" hidden>
+          <label class="f">Transcription
+            <select class="input" name="whisper_model">
+              <option value="small">Whisper small: fastest</option>
+              <option value="turbo">Whisper turbo: more accurate (1.6 GB download once)</option>
+            </select>
+          </label>
+        </div>
+        <div data-for="live" hidden>
+          <div class="switches">
+            <label class="sw"><div><b>Keep the whole recording</b><small>Otherwise only the last 15 minutes are kept (about 3 GB per hour if kept)</small></div><input type="checkbox" name="keep_recording"></label>
+          </div>
         </div>
         <div data-for="rerender" hidden>
           <label class="f">Clip list <small>Re-cut a saved clips.json with new settings, no AI cost</small>
@@ -342,7 +372,7 @@
             </label>
             <div class="switches" data-ai>
               <label class="sw"><div><b>Sound detection</b><small>Hear laughs, gunfire, explosions, sirens (free, on your Mac)</small></div><input type="checkbox" name="sound_tags" checked></label>
-              <label class="sw"><div><b>Batch API</b><small>Half price, can take minutes to hours</small></div><input type="checkbox" name="batch"></label>
+              <label class="sw" data-not-live><div><b>Batch API</b><small>Half price, can take minutes to hours</small></div><input type="checkbox" name="batch"></label>
               <label class="sw"><div><b>Find only</b><small>Pick clips without cutting video</small></div><input type="checkbox" name="dry_run"></label>
             </div>
           </div>
@@ -362,6 +392,11 @@
       </div>
       <div class="card-b">
         <div class="run-meta"><svg class="i"><use href="#i-clock"/></svg><span id="runTime"></span><code id="runCmd"></code></div>
+        <div class="live-stats" id="liveStats" hidden>
+          <div><b id="lsStream">0:00</b><span>stream checked</span></div>
+          <div><b id="lsClips">0</b><span>clips found</span></div>
+          <div><b id="lsCut">0</b><span>clips cut</span></div>
+        </div>
         <div class="log" id="log"></div>
         <button class="btn btn-outline btn-sm" id="stopBtn" type="button"><svg class="i"><use href="#i-stop"/></svg>Stop</button>
       </div>
@@ -387,6 +422,10 @@
       <span class="stat" id="costStat" hidden></span>
       <div class="spacer"></div>
       <button class="btn btn-primary btn-sm" id="renderApproved" type="button" hidden><svg class="i"><use href="#i-scissors"/></svg><span></span></button>
+    </div>
+    <div class="banner live" id="liveBanner" hidden>
+      <svg class="i"><use href="#i-radio"/></svg>
+      <div><b id="liveTitle"></b><span id="liveSub"></span></div>
     </div>
     <div class="banner" id="uncut" hidden>
       <svg class="i"><use href="#i-scissors"/></svg>
@@ -445,11 +484,13 @@ document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click
   document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
   document.querySelectorAll("[data-for]").forEach(el => el.hidden = el.dataset.for !== source);
   document.querySelectorAll("[data-ai]").forEach(el => el.hidden = source === "rerender");
+  document.querySelectorAll("[data-not-live]").forEach(el => el.hidden = source === "live");
   updateRunLabel();
 }));
 function updateRunLabel() {
   const findOnly = $("[name=dry_run]").checked;
   $("#runBtn span").textContent = source === "rerender" ? "Render clips"
+    : source === "live" ? (findOnly ? "Watch live, find clips only" : "Start live clipping")
     : findOnly ? "Find clips only (no video)" : "Find & cut clips";
 }
 $("[name=dry_run]").addEventListener("change", updateRunLabel);
@@ -488,7 +529,7 @@ async function startRun(data) {
   const res = await fetch("/api/run", { method: "POST", body: JSON.stringify(data) });
   const body = await res.json();
   if (!res.ok) { err.textContent = body.error; err.hidden = false; toast(body.error); return; }
-  logLines = 0; $("#log").innerHTML = "";
+  logLines = 0; $("#log").innerHTML = ""; resetLive();
   showJob(body); poll();
   $("#runCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -497,18 +538,38 @@ $("#runForm").addEventListener("submit", e => { e.preventDefault(); startRun(for
 
 // ---------- Run ----------
 let logLines = 0, polling = false, lastOut = null;
+// Live sessions: what the log has said so far.
+const live = { folder: null, checked: 0, found: 0, cut: 0 };
+function resetLive() { Object.assign(live, { folder: null, checked: 0, found: 0, cut: 0 }); }
+function readLiveLine(line) {
+  let m;
+  if ((m = line.match(/live into (.+?)\/ \(Ctrl\+C/))) live.folder = m[1];
+  else if ((m = line.match(/^\[(\d+):(\d\d):(\d\d)\] transcribed/))) live.checked = +m[1]*3600 + +m[2]*60 + +m[3];
+  else if (/^\s*new clip \d+:/.test(line)) live.found++;
+  else if (/^\s*saved .*\.mp4/.test(line)) live.cut++;
+}
 
 function showJob(j) {
   if (!j) return;
   $("#runCard").hidden = false;
   const b = $("#runBadge");
-  if (j.running) { b.className = "badge run"; b.innerHTML = `<span class="dot"></span>Running`; }
+  if (j.running && j.stopping) { b.className = "badge run"; b.innerHTML = `<span class="dot"></span>Finishing…`; }
+  else if (j.running && j.live) { b.className = "badge live"; b.innerHTML = `<span class="dot"></span>Live`; }
+  else if (j.running) { b.className = "badge run"; b.innerHTML = `<span class="dot"></span>Running`; }
   else if (j.code === 0) { b.className = "badge ok"; b.innerHTML = `<span class="dot"></span>Done`; }
   else { b.className = "badge bad"; b.innerHTML = `<span class="dot"></span>${j.code < 0 ? "Stopped" : "Failed"}`; }
+  $("#runCard h2").textContent = j.live ? "Live session" : "Run";
   $("#runCmd").textContent = j.cmd; $("#runCmd").title = j.cmd;
   $("#runTime").textContent = fmtTime(((j.ended || Date.now()/1000) - j.started));
   $("#stopBtn").hidden = !j.running;
+  $("#stopBtn").lastChild.textContent = j.stopping ? "Force stop" : j.live ? "Stop & finish" : "Stop";
+  $("#stopBtn").title = j.live && !j.stopping ? "Stops recording, checks the last few minutes and cuts the last clips" : "";
   $("#runBtn").disabled = j.running;
+  if (j.live) j.lines.forEach(readLiveLine);
+  $("#liveStats").hidden = !j.live;
+  $("#lsStream").textContent = fmtTime(live.checked);
+  $("#lsClips").textContent = live.found;
+  $("#lsCut").textContent = live.cut;
   const log = $("#log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   for (const line of j.lines) {
     const div = document.createElement("div");
@@ -531,15 +592,19 @@ async function poll() {
       const j = await (await fetch("/api/job?since=" + logLines)).json();
       if (!j) break;
       showJob(j);
-      const saved = j.lines.filter(l => /saved .*\.mp4/.test(l)).length;
-      if (saved) { seenSaved += saved; loadLibrary(j.out); }
-      if (!j.running) { loadLibrary(j.out); loadInputs(); break; }
+      const prefer = j.live ? live.folder : j.out;
+      const fresh = j.lines.filter(l => /saved .*\.mp4|new clip \d+:|\] transcribed/.test(l)).length;
+      if (fresh) { seenSaved += fresh; loadLibrary(prefer); }
+      if (!j.running) { loadLibrary(prefer); loadInputs(); break; }
       await new Promise(r => setTimeout(r, 1000));
     }
   } finally { polling = false; }
 }
 
-$("#stopBtn").addEventListener("click", () => fetch("/api/stop", { method: "POST", body: "{}" }));
+$("#stopBtn").addEventListener("click", async () => {
+  const j = await (await fetch("/api/stop", { method: "POST", body: "{}" })).json();
+  if (j && j.cmd) { showJob({ ...j, lines: [] }); if (j.live && j.stopping) toast("Finishing: checking the last few minutes and cutting the last clips"); }
+});
 
 // ---------- Library ----------
 let folders = [], current = null;
@@ -547,15 +612,25 @@ let folders = [], current = null;
 async function loadLibrary(prefer) {
   folders = await (await fetch("/api/library")).json();
   const names = folders.map(f => f.name);
-  if (prefer && names.includes(prefer.replace(/\/+$/, "").split("/").pop())) current = prefer.replace(/\/+$/, "").split("/").pop();
+  if (prefer) {
+    const p = prefer.replace(/^\.\//, "").replace(/\/+$/, "");
+    const hit = folders.find(f => f.name === p) || folders.find(f => f.label === p.split("/").pop());
+    if (hit) current = hit.name;
+  }
   if (!names.includes(current)) current = names[0] ?? null;
   fillSelect($("#recipeSel"), folders.filter(f => f.recipe).map(f => [f.recipe, f.recipe]));
   renderFolders(); renderGrid();
 }
 
 function renderFolders() {
+  const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const label = f => {  // live_alice_20261112-0353 -> "alice · Nov 12, 03:53"
+    const m = f.label.match(/^live_(.+)_(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)$/);
+    return m ? `${m[1]} · ${MON[+m[3] - 1]} ${+m[4]}, ${m[5]}:${m[6]}` : f.name;
+  };
   $("#folders").innerHTML = folders.map(f =>
-    `<button class="chip" aria-pressed="${f.name === current}" data-name="${esc(f.name)}">${esc(f.name)}<span>${f.clips.length}</span></button>`).join("");
+    `<button class="chip" aria-pressed="${f.name === current}" data-name="${esc(f.name)}" title="${esc(f.name)}">` +
+    `${f.live?.active ? `<span class="live-dot"></span>` : f.live ? `<svg class="i" style="width:14px;height:14px"><use href="#i-radio"/></svg>` : ""}${esc(label(f))}<span>${f.clips.length}</span></button>`).join("");
   document.querySelectorAll(".chip").forEach(c => c.onclick = () => { current = c.dataset.name; renderFolders(); renderGrid(); });
   const total = folders.reduce((n, f) => n + f.clips.length, 0);
   $("#libSummary").textContent = folders.length
@@ -582,16 +657,14 @@ function renderGrid() {
     b.setAttribute("aria-pressed", b.dataset.f === filter);
     b.querySelector("span").textContent = counts[b.dataset.f];
   });
-  const cost = $("#costStat");
-  cost.hidden = f?.cost == null && !f?.last_run;
-  if (!cost.hidden) {
-    const lr = f.last_run, secs = lr ? Object.values(lr.seconds || {}).reduce((a, b) => a + b, 0) : 0;
-    cost.innerHTML = `<svg class="i"><use href="#i-dollar"/></svg>` +
-      (f.cost != null ? `${fmtUsd(f.cost)} spent` + (counts.all ? ` · ${fmtUsd(f.cost / counts.all)}/clip` : "") : "") +
-      (lr ? ` · last run ${fmtDur(secs)}` : "");
-    cost.title = lr ? Object.entries(lr.seconds || {}).map(([k, v]) => `${k}: ${fmtDur(v)}`).join("\n") +
-      (lr.tokens ? `\n${(lr.tokens.input + lr.tokens.cache_read + lr.tokens.cache_write).toLocaleString()} input / ${lr.tokens.output.toLocaleString()} output tokens` : "") : "";
-  }
+  const cost = $("#costStat"), lr = f?.last_run, parts = [];
+  if (f?.cost != null) parts.push(`${fmtUsd(f.cost)} spent` + (counts.all ? ` · ${fmtUsd(f.cost / counts.all)}/clip` : ""));
+  if (lr) parts.push(`last run ${fmtDur(Object.values(lr.seconds || {}).reduce((a, b) => a + b, 0))}`);
+  if (f?.source_url) parts.push(`<span title="${esc(f.source_url)}">audio first: video fetched per clip (${f.sections} section${f.sections === 1 ? "" : "s"})</span>`);
+  cost.hidden = !parts.length;
+  cost.innerHTML = `<svg class="i"><use href="#i-dollar"/></svg>` + parts.join(" · ");
+  cost.title = lr ? Object.entries(lr.seconds || {}).map(([k, v]) => `${k}: ${fmtDur(v)}`).join("\n") +
+    (lr.tokens ? `\n${(lr.tokens.input + lr.tokens.cache_read + lr.tokens.cache_write).toLocaleString()} input / ${lr.tokens.output.toLocaleString()} output tokens` : "") : "";
   const ra = $("#renderApproved");
   ra.hidden = !f?.approved?.length;
   if (f?.approved?.length) ra.querySelector("span").textContent = `Render ${f.approved.length} approved`;
@@ -601,8 +674,19 @@ function renderGrid() {
   const matched = all.filter(c => c.matched && keep(c)).sort((a, b) => a.n - b.n);
   const others = all.filter(c => !c.matched && keep(c));
   const clips = [...matched, ...others];
-  $("#empty").hidden = all.length > 0 || !!f?.uncut;
-  $("#uncut").hidden = !f?.uncut;
+  const lv = f?.live, onAir = !!lv?.active;
+  $("#liveBanner").hidden = !lv || lv.status === "ended";
+  if (lv && lv.status !== "ended") {
+    const cutN = all.filter(c => c.matched).length;
+    $("#liveTitle").textContent = !onAir ? "This live session stopped without finishing"
+      : lv.status === "finishing" ? "Live · finishing the last few minutes" : "Live · recording";
+    $("#liveSub").textContent = !onAir
+      ? `It was last heard from ${lv.age != null ? fmtDur(lv.age) + " ago" : "a while ago"}. Clips cut so far are below; cut the rest with Re-render.`
+      : `Checked up to ${fmtTime(lv.analysed || 0)} of the stream · ${cutN} clip${cutN === 1 ? "" : "s"} cut` +
+        (f.uncut ? `, ${f.uncut} being cut` : "") + ". New clips appear here a few minutes after each moment; you can Keep/Reject them now.";
+  }
+  $("#empty").hidden = all.length > 0 || !!f?.uncut || onAir;
+  $("#uncut").hidden = !f?.uncut || onAir;
   if (f?.uncut) $("#uncutTitle").textContent =
     `${f.uncut} clip${f.uncut === 1 ? "" : "s"} found but not ${clips.some(c => c.preview) ? "rendered at full quality" : "cut"} yet`;
   const grid = $("#grid");
@@ -748,6 +832,8 @@ $("#promptText").addEventListener("input", () => {
 });
 
 $("#reloadBtn").addEventListener("click", () => { loadLibrary(); loadInputs(); });
+// Live sessions (from here or the command line) keep adding clips: refresh while one is on.
+setInterval(() => { if (!polling && folders.some(f => f.live?.active)) loadLibrary(); }, 8000);
 
 // ---------- Start ----------
 (async () => {

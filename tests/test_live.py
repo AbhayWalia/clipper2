@@ -126,3 +126,20 @@ def test_live_rejects_other_sources():
     from clipfinder.cli import parse_args
     with pytest.raises(SystemExit):
         parse_args(["--live", "https://twitch.tv/x", "--url", "https://twitch.tv/videos/1"])
+
+
+def test_saving_keeps_review_and_trims_made_in_the_web_ui(tmp_path):
+    import json
+    s = session(tmp_path, live="u", model="m", effort="medium", streamer=None)
+    s.clips = [clip(10, 40, title="a"), clip(100, 130, title="b")]
+    s.save()
+    data = json.loads(s.recipe.read_text())
+    data["clips"][0]["review"] = "approved"                       # what the web UI writes
+    data["clips"][1].update(review="rejected", start=101.0, original_start=100.0, edited_at=1.0)
+    s.recipe.write_text(json.dumps(data))
+    s.clips.append(clip(200, 230, title="c"))                      # a new clip arrives
+    s.save()
+    got = json.loads(s.recipe.read_text())["clips"]
+    assert [c.get("review") for c in got] == ["approved", "rejected", None]
+    assert got[1]["start"] == 101.0 and got[1]["original_start"] == 100.0
+    assert s.clips[1].start == 101.0                               # later cuts use the trim

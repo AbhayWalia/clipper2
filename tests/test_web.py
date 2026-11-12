@@ -89,3 +89,46 @@ def test_run_cost():
         pass
     d = s.to_dict("find", 3)
     assert d["requests"] == 4 and "cut" in d["seconds"] and d["cost_usd"] is None
+
+
+def test_live_runs_from_the_form(project):
+    cmd, _ = web.build_command({"source": "live", "live_url": "https://twitch.tv/alice",
+                                "whisper_model": "turbo", "keep_recording": True, "batch": True,
+                                "vertical": True})
+    assert cmd[cmd.index("--live") + 1] == "https://twitch.tv/alice"
+    assert "--keep-recording" in cmd and "--vertical" in cmd and "--batch" not in cmd
+    assert cmd[cmd.index("--whisper-model") + 1] == "turbo"
+    with pytest.raises(ValueError):
+        web.build_command({"source": "live", "live_url": ""})
+    with pytest.raises(ValueError):
+        web.build_command({"source": "live", "live_url": "u", "whisper_model": "; rm -rf /"})
+
+
+def test_live_sessions_show_up_with_their_state(project):
+    from datetime import datetime, timezone
+    session = project / "clips" / "live_alice_20261112-0400"
+    session.mkdir()
+    now = datetime.now(timezone.utc).isoformat()
+    (session / "clips.json").write_text(json.dumps({"video": None, "clips": [], "live": {
+        "source": "https://twitch.tv/alice", "status": "recording", "analysed": 754.0, "updated": now}}))
+    (project / "clips" / "live_old").mkdir()
+    (project / "clips" / "live_old" / "clips.json").write_text(json.dumps({"clips": [], "live": {
+        "status": "recording", "updated": "2026-01-01T00:00:00+00:00"}}))
+    lib = {f["name"]: f for f in web.library()}
+    f = lib["clips/live_alice_20261112-0400"]
+    assert f["label"] == "live_alice_20261112-0400"
+    assert f["live"]["active"] and f["live"]["analysed"] == 754.0
+    assert not lib["clips/live_old"]["live"]["active"]       # crashed: no heartbeat for months
+    assert lib["clips"]["live"] is None
+
+
+def test_stop_asks_nicely_first_then_ends_the_whole_group(monkeypatch):
+    sent = []
+    monkeypatch.setattr(web.os, "killpg", lambda pgid, sig: sent.append(("group", pgid, sig)))
+    job = web.Job.__new__(web.Job)
+    job.code, job.stopping = None, False
+    job.proc = types.SimpleNamespace(pid=4242, send_signal=lambda s: sent.append(s),
+                                     terminate=lambda: sent.append("terminate"))
+    job.stop()
+    job.stop()
+    assert sent == [web.signal.SIGINT, ("group", 4242, web.signal.SIGTERM)]

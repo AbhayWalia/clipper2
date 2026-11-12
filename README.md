@@ -66,11 +66,18 @@ python clipper.py --video stream.mp4 --transcribe --chat chat.json \
 Prefer clicking to flags? Run `python ui.py` from the venv and open http://localhost:8000
 (`--port 9000` for another port). It only listens on your own machine.
 
-- **New run:** start from a Twitch/YouTube link, a video in the project folder, or a saved
-  `clips.json` (re-render with new settings, no AI cost). The main options are switches; the
-  rest (notes for Claude, clip count and length, padding, effort, Batch API, sound detection,
-  output folder) are under More options. The log streams live and a run can be stopped.
-- **Clips:** every output folder gets a tab and every clip a card with its score, category,
+- **New run:** start from a Twitch/YouTube link (with an **Audio first** switch, on by default),
+  a video in the project folder, a channel that's **Live** now, or a saved `clips.json`
+  (**Render** with new settings, no AI cost). The main options are switches; the rest (notes
+  for Claude, clip count and length, padding, effort, Batch API, sound detection, output
+  folder) are under More options. The log streams live and a run can be stopped.
+- **Live:** paste a channel link and press Start live clipping. The run card shows how much of
+  the stream has been checked and how many clips were found and cut; the session's folder gets
+  a red dot, and clips appear in it as they're cut, ready to Keep/Reject while the stream is
+  still on. **Stop & finish** checks the last few minutes and cuts the last clips (press again
+  to force stop). A session that stops without finishing (e.g. the computer slept) is marked
+  so you can cut what's left with Render.
+- **Clips:** every output folder (and each live session in it) gets a tab and every clip a card with its score, category,
   hook, timestamps, real length and why Claude picked it, plus Download and Copy caption.
   Clips listed in `clips.json` but not cut yet get a **Cut them now** button.
 
