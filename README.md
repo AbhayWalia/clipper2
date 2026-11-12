@@ -31,6 +31,9 @@ Use it from the command line (`python clipper.py`) or the web UI (`python ui.py`
 # Straight from a Twitch VOD or YouTube URL: downloads video, captions and chat
 python clipper.py --url https://www.twitch.tv/videos/123456789 --streamer alice --burn-captions
 
+# Long VOD? Download only the audio, then only the video around each clip (see below)
+python clipper.py --url https://www.twitch.tv/videos/123456789 --audio-first --burn-captions
+
 # Basic: find clips and cut them into ./clips
 python clipper.py --video stream.mp4 --transcript stream.srt
 
@@ -166,6 +169,27 @@ The stream title becomes `--context` and the channel name becomes `--streamer` (
 layout and the feedback library) unless you give your own. Files already downloaded are reused,
 so re-running on the same URL is cheap. Only clip streams you have permission to use.
 
+### Audio first: skip downloading the whole VOD
+
+Finding clips only needs sound: Whisper, loudness and sound detection all listen, and captions
+and chat come separately. With `--audio-first`, the clipper downloads the audio track
+(roughly 60-70 MB per hour, against several GB of 1080p video), finds the clips from it, and
+then downloads only the video around each clip into `segments/`, 8 sections at a time.
+
+- Sections line up exactly with the audio, so clip times and captions don't drift.
+- `clips.json` records the source URL instead of a video. Re-renders (`--clips-json`, or
+  **Render approved** in the web UI) download only what the chosen clips need. A trim past the
+  downloaded footage fetches just the missing piece. Sections already on disk are reused.
+- Each section has 10 s of extra footage either side (`--segment-pad` to change it).
+- With **Find only** (`--dry-run`), no video is downloaded at all until you render.
+- **When it's slower:** YouTube sends sections at under 2x playback speed (sections run in
+  parallel, so 15 clips take about a minute), while it sends a whole video very fast. For short
+  videos, downloading the whole thing is quicker. For multi-hour streams, audio first wins.
+- It needs the source to stay online until you've rendered. `--grab-frame` needs the whole
+  video, so set up facecam layouts from a normal download.
+
+The web UI's **Link** tab has an **Audio first** switch, on by default.
+
 ## Transcript formats
 
 - `.srt` / `.vtt` subtitle files (YouTube, Twitch, Premiere, CapCut, etc.). Captions you already
@@ -191,6 +215,7 @@ In the output folder:
 | Option | Default | What it does |
 |---|---|---|
 | `--url` | none | Twitch VOD / YouTube URL: downloads video, captions and chat |
+| `--audio-first` | off | With --url, download the audio to find clips, then only the video around each clip |
 | `--no-captions` / `--no-chat` | off | With --url, use Whisper instead of the platform captions / skip chat |
 | `--top` | 15 | Max clips to keep (0 = all) |
 | `--min-score` | 6 | Drop clips the AI scored below this (1–10) |
@@ -208,7 +233,7 @@ In the output folder:
 | `--dry-run` | off | Find clips and save `clips.json` without cutting any video |
 | `--reencode` | off | Re-encode even when a stream copy would do |
 | `--keep-audio` | off | Keep the 16 kHz audio extracted for Whisper |
-| `--save-segments` / `--segment-pad` | off / 30 | Keep the footage around each clip in `segments/` so the VOD can be deleted |
+| `--save-segments` / `--segment-pad` | off / 30 (10 with --audio-first) | Keep the footage around each clip in `segments/` so the VOD can be deleted |
 | `--from-segments` | off | Re-render from saved segments even if the VOD still exists (automatic when it's gone) |
 | `--upload` / `--upload-vod` | off | Upload the run to S3 or R2 (`clips/`, `recipes/`; `vods/` too). See *Running it as a service* |
 | `--fetch STREAM` | none | Download a stream's run from the bucket into `clips/STREAM/` to re-render it |
@@ -259,7 +284,7 @@ In the output folder:
 
 | Module | What's in it |
 |---|---|
-| `clipfinder/fetch.py` | `--url`: download video, captions and chat |
+| `clipfinder/fetch.py` | `--url`: download video (or audio first, then clip sections), captions and chat |
 | `clipfinder/transcript.py` | Transcript parsers and chunking |
 | `clipfinder/transcribe.py` | Audio extraction, Whisper, and filtering Whisper's invented filler |
 | `clipfinder/llm.py` | Prompt, Claude calls, batch, refusal fallback, rescoring |
@@ -370,7 +395,6 @@ and TikTok, Shorts and Reels give 1080p uploads better quality. Two more savings
 
 - A benchmark: score the finder against a VOD's most-viewed Twitch community clips, so prompt
   and model changes are measured instead of guessed.
-- Download only what's needed: fetch audio and chat first, then only the clip sections.
 - Send Claude a few frames from each candidate clip when rescoring, to catch visual moments.
 - Detect GTA HUD events (wanted stars, "Wasted") from the video frames.
 - Detect the facecam box automatically (face detection on a few frames) to speed up layout setup.

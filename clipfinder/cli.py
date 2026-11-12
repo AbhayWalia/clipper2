@@ -16,6 +16,7 @@ from .captions import CaptionStyle, build_ass
 from .clips import (clean_clips, clip_id, load_manifest, save_manifest, source_fingerprint,
                     update_manifest)
 from .layout import DEFAULT_LAYOUTS, Layout, grab_frame, load_layouts, parse_box, save_layout
+from .fetch import SECTION_PAD, download_sections
 from .render import (SEGMENT_PAD, VERTICAL_SIZE, choose_mode, cut_clip, fmt_srt_time,
                      keyframe_before, pick_encoder, save_segments, segment_for, segment_windows,
                      slugify, video_duration, video_size, write_clip_srt)
@@ -32,6 +33,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     io.add_argument("--url", help="Twitch VOD / YouTube URL: downloads the video, its captions and chat")
     io.add_argument("--source-dir", type=Path, help="Where --url downloads go (default: OUT/source)")
     io.add_argument("--no-chat", action="store_true", help="With --url, don't download chat")
+    io.add_argument("--audio-first", action="store_true",
+                    help="With --url, download only the audio (plus captions and chat) to find clips, "
+                         "then only the video around each clip. Far less to download for long VODs")
     io.add_argument("--no-captions", action="store_true",
                     help="With --url, ignore the platform's captions and use Whisper")
     io.add_argument("--max-height", type=int, default=1080,
@@ -141,8 +145,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     keep.add_argument("--save-segments", action="store_true",
                       help="Stream-copy the footage around each clip into OUT/segments/ and record it "
                            "in clips.json, so clips can be re-rendered after the VOD is deleted")
-    keep.add_argument("--segment-pad", type=float, default=SEGMENT_PAD,
-                      help="Seconds of extra footage kept on each side of a clip")
+    keep.add_argument("--segment-pad", type=float, default=None,
+                      help=f"Seconds of extra footage kept on each side of a clip (default "
+                           f"{SEGMENT_PAD:g}; {SECTION_PAD:g} with --audio-first, which fetches "
+                           f"more later if a trim needs it)")
     keep.add_argument("--from-segments", action="store_true",
                       help="With --clips-json, render from the saved segments even if the VOD exists "
                            "(automatic when it doesn't)")
@@ -160,6 +166,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     cloud.add_argument("--fetch", metavar="STREAM",
                        help="Download clips/STREAM/ from the bucket into OUT/STREAM/ to re-render it, then exit")
     args = p.parse_args(argv)
+    if args.audio_first and not args.url:
+        p.error("--audio-first needs --url (it downloads the video around each clip from there).")
     if args.window <= 0 or not 0 <= args.overlap < args.window:
         p.error(f"--overlap ({args.overlap:g}) must be at least 0 and smaller than "
                 f"--window ({args.window:g}).")
@@ -329,11 +337,21 @@ def fetch_url(args) -> None:
     dest = args.source_dir or args.out / "source"
     print(f"Fetching {args.url} into {dest}/ (already-downloaded files are reused)...")
     got = fetch_source(args.url, dest, video=True, captions=not args.no_captions,
-                       chat=not args.no_chat and not args.chat, max_height=args.max_height)
-    if not got.video:
-        sys.exit("The download finished but no video file was found.")
-    args.video = got.video
-    print(f"  video:    {got.video.name}" + (f"  ({got.title})" if got.title else ""))
+                       chat=not args.no_chat and not args.chat, max_height=args.max_height,
+                       audio_only=args.audio_first)
+    if args.audio_first:
+        if not got.audio:
+            sys.exit("The download finished but no audio file was found.")
+        # The audio stands in for the video until clips are picked; then only the
+        # footage around them is downloaded (see fetch_sections).
+        args.video, args.source_url = got.audio, got.url
+        print(f"  audio:    {got.audio.name}" + (f"  ({got.title})" if got.title else "")
+              + "; the video around each clip comes later")
+    else:
+        if not got.video:
+            sys.exit("The download finished but no video file was found.")
+        args.video = got.video
+        print(f"  video:    {got.video.name}" + (f"  ({got.title})" if got.title else ""))
     if not args.transcript and not args.transcribe and not args.clips_json:
         if got.captions:
             args.transcript = got.captions
@@ -349,6 +367,27 @@ def fetch_url(args) -> None:
     if not args.streamer and got.uploader:
         args.streamer = streamer_slug(got.uploader)
         print(f"  streamer: {args.streamer} (from the channel name; override with --streamer)")
+
+
+def fetch_sections(args, url: str, spans: list[tuple[float, float]], segments: list[dict],
+                   folder: Path, recipe: Path, vlen: float | None) -> list[dict]:
+    """Audio first: download the video for clip spans no section covers yet (the first
+    render, approved clips found earlier, or a trim past what was downloaded)."""
+    todo = [(s, e) for s, e in spans
+            if not any(g["start"] <= s + 1e-3 and e <= g["end"] + 1e-3 for g in segments)]
+    if not todo:
+        return segments
+    windows = segment_windows(todo, args.segment_pad, vlen)
+    minutes = sum(e - s for s, e in windows) / 60
+    print(f"\nDownloading the video around {len(todo)} clip(s): {len(windows)} section(s), "
+          f"{minutes:.1f} min of footage...")
+    with STATS.stage("download"):
+        new = download_sections(url, folder, windows, args.max_height)
+    known = {g["file"] for g in segments}
+    segments = segments + [g for g in new if g["file"] not in known]
+    update_manifest(recipe, segments=segments)
+    print(f"  got {len(new)} of {len(windows)} section(s) in {folder / 'segments'}")
+    return segments
 
 
 def report_run(recipe: Path, kind: str, n_clips: int) -> None:
@@ -425,6 +464,7 @@ def main(argv=None) -> None:
             if t.exists():
                 args.transcript = t
 
+    args.source_url = None
     if args.url:
         with STATS.stage("download"):
             fetch_url(args)
@@ -432,11 +472,24 @@ def main(argv=None) -> None:
     # Saved segments live next to clips.json; their paths in it are relative to it.
     folder = args.clips_json.parent if args.clips_json else args.out
     segments = manifest.get("segments") or []
+    # Audio first: there's no VOD, only the source URL; video comes in sections per clip.
+    # A clips.json from such a run records source_url and no video, so re-renders work alike.
+    if not args.source_url and not manifest.get("video") and not args.video:
+        args.source_url = manifest.get("source_url")
+    sections = bool(args.source_url)
+    if args.segment_pad is None:
+        args.segment_pad = SECTION_PAD if sections else SEGMENT_PAD
+    if sections and (args.grab_frame is not None or args.save_segments):
+        sys.exit("--grab-frame and --save-segments need the whole video; run without --audio-first "
+                 "(with --audio-first the footage around each clip is already kept in segments/).")
     if args.from_segments and not segments:
         sys.exit("--from-segments needs a --clips-json with saved segments (made with --save-segments).")
-    use_segments = bool(segments) and (args.from_segments or not (args.video and args.video.exists()))
+    use_segments = sections or (bool(segments) and
+                                (args.from_segments or not (args.video and args.video.exists())))
 
-    if use_segments:
+    if sections:
+        pass  # sections are downloaded just before cutting
+    elif use_segments:
         missing = [s["file"] for s in segments if not (folder / s["file"]).exists()]
         if missing:
             sys.exit(f"Saved segment(s) missing from {folder}: {', '.join(missing)}")
@@ -451,7 +504,10 @@ def main(argv=None) -> None:
             sys.exit(f"Video not found: {args.video}")
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg isn't installed or isn't on your PATH.")
-    probe = folder / segments[0]["file"] if use_segments else args.video
+    if use_segments:
+        probe = folder / segments[0]["file"] if segments else None
+    else:
+        probe = args.video
 
     if args.grab_frame is not None:
         out = args.out / f"frame_{args.grab_frame:.0f}s.png"
@@ -485,7 +541,7 @@ def main(argv=None) -> None:
         sys.exit("Give --transcript, --transcribe or --clips-json.")
 
     args.out.mkdir(parents=True, exist_ok=True)
-    vlen = None if use_segments else video_duration(args.video)
+    vlen = video_duration(args.video) if args.video and (sections or not use_segments) else None
     segs = load_transcript(args.transcript) if args.transcript else []
 
     if not args.clips_json:
@@ -495,7 +551,9 @@ def main(argv=None) -> None:
               f"({segs[0].start/60:.0f}-{segs[-1].end/60:.0f} min).")
         with STATS.stage("find clips"):
             clips = find_clips(args, segs, vlen)
-        save_manifest(args.out / "clips.json", clips, video=args.video.resolve(),
+        media = ({"video": None, "audio": args.video.resolve(), "source_url": args.source_url}
+                 if sections else {"video": args.video.resolve()})
+        save_manifest(args.out / "clips.json", clips, **media,
                       transcript=args.transcript.resolve(), model=args.model,
                       triage_model=args.triage_model, effort=args.effort,
                       streamer=args.streamer)
@@ -532,6 +590,17 @@ def main(argv=None) -> None:
         segments = new
         print(f"  saved to {folder / 'segments'}; {recipe} can now re-render without the VOD.")
 
+    only = {int(x) for x in args.only.split(",") if x.strip()} if args.only else None
+    if sections:
+        spans = [(max(c.start - args.pad_before, 0.0),
+                  min(c.end + args.pad_after, vlen) if vlen else c.end + args.pad_after)
+                 for i, c in enumerate(clips, 1) if only is None or i in only]
+        segments = fetch_sections(args, args.source_url, spans, segments, folder,
+                                  args.clips_json or args.out / "clips.json", vlen)
+        if not segments:
+            sys.exit("None of the clip sections could be downloaded, so there's nothing to cut.")
+        probe = folder / segments[0]["file"]
+
     burn = args.burn_captions and bool(segs)
     if args.burn_captions and not segs:
         print("No transcript, so no captions to burn in.")
@@ -557,7 +626,6 @@ def main(argv=None) -> None:
            "encode": encoder}[mode] + (f", {args.streamer or 'custom'} facecam layout" if layout else "")
     print(f"\nCutting clips with {how} ({args.jobs} at a time)...")
 
-    only = {int(x) for x in args.only.split(",") if x.strip()} if args.only else None
     jobs = []
     for i, c in enumerate(clips, 1):
         if only is not None and i not in only:

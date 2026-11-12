@@ -94,6 +94,8 @@ def build_command(f: dict) -> tuple[list[str], str]:
         if not text("url"):
             raise ValueError("Paste a Twitch or YouTube link.")
         args += ["--url", text("url")]
+        if f.get("audio_first") is True:
+            args.append("--audio-first")
     elif source == "video":
         if not text("video"):
             raise ValueError("Pick a video file.")
