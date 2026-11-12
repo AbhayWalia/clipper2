@@ -84,6 +84,13 @@ def test_clean_min_len_including_padding():
     assert out[0].duration + 3.0 >= 12.0
 
 
+def test_clean_min_len_near_video_end_starts_earlier():
+    # A 4s clip 2s before the end: lengthening it can't go past the end, so it starts earlier.
+    out = clean_clips([clip(44.0, 48.0)], SEGS, min_len=12, max_len=75,
+                      min_score=0, top=0, video_len=50.0)
+    assert out[0].end == 50.0 and out[0].duration >= 12.0
+
+
 def test_clean_overlap_keeps_higher_score_and_top_n():
     clips = [clip(0, 20, score=7), clip(10, 30, score=9), clip(35, 50, score=6)]
     out = clean_clips(clips, SEGS, 5, 75, min_score=0, top=0, video_len=None)

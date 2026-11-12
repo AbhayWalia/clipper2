@@ -81,8 +81,10 @@ def clean_clips(clips: list[Clip], segs: list[Segment], min_len: float,
             c.end = c.start + hi
         if c.duration < lo:
             c.end = c.start + lo
-        if video_len:
-            c.end = min(c.end, video_len)
+        if video_len and c.end > video_len:
+            # Near the end of the video: keep the length by starting earlier instead.
+            c.start = max(c.start - (c.end - video_len), 0.0)
+            c.end = video_len
         if c.score >= min_score and c.duration > 0:
             out.append(c)
 
