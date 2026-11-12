@@ -21,7 +21,9 @@ from .render import (SEGMENT_PAD, VERTICAL_SIZE, choose_mode, cut_clip, fmt_srt_
                      slugify, video_duration, video_size, write_clip_srt)
 from .stats import STATS
 from .signals import Signals, audio_events, chat_events, load_chat, measure_loudness
-from .storage import MAX_LINK_DAYS, Store, StorageError, load_dotenv, stream_name
+from .db import Database, DatabaseError
+from .storage import (MAX_LINK_DAYS, Store, StorageError, load_dotenv, new_run_name, run_path,
+                      stream_name, user_id)
 from .transcribe import transcribe, transcript_path_for
 from .transcript import chunk_segments, load_transcript
 
@@ -153,12 +155,17 @@ def parse_args(argv=None) -> argparse.Namespace:
                             "+ transcript to recipes/STREAM/")
     cloud.add_argument("--upload-vod", action="store_true",
                        help="With --upload, also upload the source video to vods/ (deleted after 1 day)")
-    cloud.add_argument("--stream", help="Name of this stream in the bucket (default: the video's file name)")
+    cloud.add_argument("--stream", help="Name of this run in the bucket (default: the video's file name "
+                       "plus a random suffix, so uploads never overwrite each other)")
+    cloud.add_argument("--user", metavar="USER_ID",
+                       help="Upload into this user's folder (clips/USER_ID/RUN/...) and record the run "
+                            "and its clips in Supabase. Default: CLIPPER_USER from .env")
     cloud.add_argument("--links", action="store_true",
                        help=f"With --upload, print download links for the clips "
                             f"(valid {MAX_LINK_DAYS} days, the most S3/R2 allow)")
-    cloud.add_argument("--fetch", metavar="STREAM",
-                       help="Download clips/STREAM/ from the bucket into OUT/STREAM/ to re-render it, then exit")
+    cloud.add_argument("--fetch", metavar="RUN",
+                       help="Download clips/[USER_ID/]RUN/ from the bucket into OUT/RUN/ to re-render it, "
+                            "then exit (add --user for a user's run)")
     args = p.parse_args(argv)
     if args.window <= 0 or not 0 <= args.overlap < args.window:
         p.error(f"--overlap ({args.overlap:g}) must be at least 0 and smaller than "
@@ -363,40 +370,101 @@ def report_run(recipe: Path, kind: str, n_clips: int) -> None:
         print(f"  (couldn't record run stats in {recipe}: {e})")
 def fetch_run(args) -> None:
     """--fetch: download a stream's output folder from the bucket so it can be re-rendered."""
-    name = stream_name(args.fetch)
-    dest = args.out / name
     try:
-        files = Store.from_env().fetch_run(name, dest, args.jobs)
+        name = stream_name(args.fetch)
+        user = args.user or os.environ.get("CLIPPER_USER")
+        user = user_id(user) if user else None
+        dest = args.out / name
+        files = Store.from_env().fetch_run(run_path(user, name), dest, args.jobs)
     except StorageError as e:
         sys.exit(str(e))
     print(f"Downloaded {len(files)} file(s) to {dest}/. Re-render with:\n"
-          f"  python clipper.py --clips-json {dest / 'clips.json'} --stream {name} ...")
+          f"  python clipper.py --clips-json {dest / 'clips.json'} ...")
+
+
+def run_rows(args, recipe: Path, path: str, user: str, mode: str,
+             made: list[Path]) -> tuple[dict, list[dict]]:
+    """The Supabase rows for an uploaded run: the run itself and each clip it rendered."""
+    from datetime import datetime, timezone
+    data = json.loads(recipe.read_text(encoding="utf-8"))
+    listed = data.get("clips") or []
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    seconds = video_duration(args.video) if args.video and args.video.exists() else None
+    costs = [r.get("cost_usd") for r in data.get("runs") or [] if r.get("cost_usd") is not None]
+    sub = "previews/" if mode == "preview" else ""
+    clips = []
+    for mp4 in made:
+        try:
+            idx = int(mp4.name.split("_", 1)[0])
+            c = listed[idx - 1]
+        except (ValueError, IndexError):
+            continue
+        clips.append({
+            "run_id": path, "idx": idx, "title": c.get("title"), "hook": c.get("hook"),
+            "category": c.get("category"), "score": c.get("score"),
+            "start_s": c.get("start"), "end_s": c.get("end"),
+            "file_key": f"clips/{path}/{sub}{mp4.name}", "is_preview": mode == "preview",
+            "size_bytes": mp4.stat().st_size if mp4.exists() else None,
+            "review": c.get("review") if c.get("review") in ("approved", "rejected") else None,
+            "updated_at": now})
+    run = {"id": path, "user_id": user,
+           "video_name": Path(data.get("video") or (args.video or "")).name or None,
+           "video_minutes": round(seconds / 60, 2) if seconds else None,
+           "mode": mode, "status": "uploaded", "clip_count": len(listed),
+           "cost_usd": round(sum(costs), 4) if costs else None, "updated_at": now}
+    return run, clips
+
+
+def record_run(args, recipe: Path, path: str, user: str, mode: str, made: list[Path]) -> None:
+    """Record the uploaded run in Supabase. The files are already safe in the bucket, so a
+    database problem is reported but doesn't fail the run."""
+    db = Database.from_env()
+    if db is None:
+        print("  not recorded in Supabase: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env")
+        return
+    try:
+        run, clips = run_rows(args, recipe, path, user, mode, made)
+        db.record_run(run, clips)
+    except (DatabaseError, OSError, ValueError) as e:
+        print(f"  uploaded, but not recorded in Supabase: {e}")
+        return
+    print(f"  recorded run {path} and {len(clips)} clip(s) in Supabase")
 
 
 def upload_run(args, folder: Path, mode: str, made: list[Path], segments: list[dict]) -> None:
     """--upload: push this run's files (and recipe, transcript, VOD) to the bucket.
     Only files this run made are sent, since the output folder may hold other streams'."""
-    name = stream_name(args.stream or (args.video.stem if args.video else folder.resolve().name))
+    try:
+        name = (stream_name(args.stream) if args.stream
+                else new_run_name(args.video.stem if args.video else folder.resolve().name))
+        user = args.user or os.environ.get("CLIPPER_USER")  # --user, then clips.json, then .env
+        user = user_id(user) if user else None
+    except StorageError as e:
+        sys.exit(str(e))
+    path = run_path(user, name)
     recipe = folder / "clips.json"
-    update_manifest(recipe, stream=name)  # so a fetched copy re-uploads under the same name
+    # Saved so a re-render or a fetched copy uploads to the same place.
+    update_manifest(recipe, stream=name, **({"user": user} if user else {}))
     # Paths in the bucket mirror the run folder: clips at the top, previews/ and segments/ below.
     files = {p.with_suffix(ext): ("previews/" if mode == "preview" else "") + p.with_suffix(ext).name
              for p in made for ext in (".mp4", ".srt", ".ass")}
     files.update({folder / s["file"]: s["file"] for s in segments})
     files[recipe] = "clips.json"
-    print(f"\nUploading to {os.environ.get('CLIPPER_BUCKET', '?')} as {name}...")
+    print(f"\nUploading to {os.environ.get('CLIPPER_BUCKET', '?')} as {path}...")
     try:
         store = Store.from_env()
-        keys = store.upload_run(name, files, recipe, args.transcript,
+        keys = store.upload_run(path, files, recipe, args.transcript,
                                 args.video if args.upload_vod else None, args.jobs)
     except StorageError as e:
         sys.exit(str(e))
-    print(f"  uploaded {len(keys)} file(s) to clips/{name}/ and recipes/{name}/"
+    print(f"  uploaded {len(keys)} file(s) to clips/{path}/ and recipes/{path}/"
           + (", source to vods/" if args.upload_vod else ""))
+    if user:
+        record_run(args, recipe, path, user, mode, made)
     if args.links:
         sub = "previews/" if mode == "preview" else ""
-        clip_keys = sorted(k for k in store.sizes(f"clips/{name}/{sub}")
-                           if k.endswith(".mp4") and "/" not in k[len(f"clips/{name}/{sub}"):])
+        clip_keys = sorted(k for k in store.sizes(f"clips/{path}/{sub}")
+                           if k.endswith(".mp4") and "/" not in k[len(f"clips/{path}/{sub}"):])
         print(f"Download links (valid {MAX_LINK_DAYS} days):")
         for k in clip_keys:
             print(f"  {k.rsplit('/', 1)[-1]}: {store.link(k)}")
@@ -418,6 +486,8 @@ def main(argv=None) -> None:
             args.video = Path(manifest["video"])
         if not args.stream and manifest.get("stream"):
             args.stream = manifest["stream"]
+        if not args.user and manifest.get("user"):
+            args.user = manifest["user"]
         if not args.transcript and manifest.get("transcript"):
             t = Path(manifest["transcript"])
             if not t.exists():  # e.g. a run fetched from storage: the transcript sits beside it

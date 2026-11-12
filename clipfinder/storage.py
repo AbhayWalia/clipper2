@@ -10,10 +10,13 @@ from the environment (or a .env file):
 
 Bucket layout, which storage/lifecycle.json expires by prefix:
 
-    vods/<stream>.mp4        source video                      deleted after 1 day
-    clips/<stream>/...       the output folder (clips, srt,     deleted after 30 days
+    vods/<run>.mp4           source video                      deleted after 1 day
+    clips/<run>/...          the output folder (clips, srt,     deleted after 30 days
                              previews/, segments/, clips.json)
-    recipes/<stream>/...     clips.json + transcript           kept
+    recipes/<run>/...        clips.json + transcript           kept
+
+<run> is "<user_id>/<run name>" for a user's run (see run_path), so each user's files sit in
+their own folder while the retention prefix stays first, where the lifecycle rules match it.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,3 +166,23 @@ def stream_name(text: str) -> str:
     if not name:
         raise StorageError(f"Can't make a stream name from {text!r}; pass --stream NAME.")
     return name
+
+
+def new_run_name(stem: str) -> str:
+    """A run name from a video's file name plus a random suffix, so two uploads of
+    "stream.mp4" (by one user or two) never land in the same folder."""
+    return f"{stream_name(stem)[:60]}-{secrets.token_hex(3)}"
+
+
+def user_id(text: str) -> str:
+    """A user id as given (e.g. a Supabase user UUID), checked to be one safe path segment."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", text or ""):
+        raise StorageError(f"{text!r} isn't a valid user id: use letters, digits, - and _ only "
+                           f"(a Supabase user's UUID works).")
+    return text
+
+
+def run_path(user: str | None, run: str) -> str:
+    """Where a run sits under clips/, recipes/ and vods/: "<user>/<run>", or "<run>"
+    for runs not tied to a user."""
+    return f"{user}/{run}" if user else run
