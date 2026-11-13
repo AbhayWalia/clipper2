@@ -26,7 +26,7 @@ def project(tmp_path, monkeypatch):
 def test_review_and_trim_are_saved(project):
     web.update_clip({"recipe": "clips/clips.json", "n": 2, "review": "approved"})
     out = web.update_clip({"recipe": "clips/clips.json", "n": 2, "nudge_end": -1})
-    assert out == {"start": 100.0, "end": 129.0, "review": "approved"}
+    assert out == {"start": 100.0, "end": 129.0, "review": "approved", "facecam": None}
     clip = json.loads((project / "clips/clips.json").read_text())["clips"][1]
     assert clip["original_end"] == 130.0 and clip["edited_at"] > 0
     web.update_clip({"recipe": "clips/clips.json", "n": 2, "review": None})

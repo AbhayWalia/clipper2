@@ -208,6 +208,9 @@
   .review .btn { width: 100%; }
   .btn-approve[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
   .btn-reject[aria-pressed="true"] { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .btn-cam { width: 100%; justify-content: space-between; }
+  .btn-cam .state { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--muted); color: var(--fg-muted); }
+  .btn-cam[aria-pressed="true"] .state { background: var(--accent-soft); color: var(--accent); }
   .trim { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 4px 6px; font-size: 12px; color: var(--fg-muted); }
   .trim b { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; text-align: center; }
   .trim .nudge { display: inline-flex; gap: 2px; }
@@ -260,6 +263,7 @@
   <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
   <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
   <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></symbol>
+  <symbol id="i-cam" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
 </svg>
 
@@ -332,6 +336,7 @@
 
         <div class="switches">
           <label class="sw"><div><b>Vertical 9:16</b><small>For TikTok, Shorts and Reels</small></div><input type="checkbox" name="vertical" checked></label>
+          <label class="sw"><div><b>Streamer cam</b><small>Put the streamer's webcam above the gameplay (found automatically)</small></div><input type="checkbox" name="facecam" checked></label>
           <label class="sw"><div><b>Burn in captions</b><small>Word-by-word, TikTok style</small></div><input type="checkbox" name="burn_captions" checked></label>
           <label class="sw"><div><b>Hook banner</b><small>Big text for the first 3 seconds</small></div><input type="checkbox" name="hook_overlay"></label>
           <label class="sw"><div><b>Quick previews</b><small>480p drafts first, render keepers later</small></div><input type="checkbox" name="preview"></label>
@@ -705,9 +710,12 @@ function renderGrid() {
 async function saveClip(f, n, change) {
   const res = await fetch("/api/clip", { method: "POST", body: JSON.stringify({ recipe: f.recipe, n, ...change }) });
   const body = await res.json();
-  if (!res.ok) { toast(body.error); return; }
+  if (!res.ok) { toast(body.error); return false; }
   await loadLibrary();
+  return true;
 }
+// Does this clip have the streamer's cam? Its own choice, else whether one was found for the stream.
+const camOn = (c, f) => c.facecam ?? (f?.cam === true);
 
 $("#renderApproved").addEventListener("click", () => {
   const f = folders.find(x => x.name === current);
@@ -723,7 +731,7 @@ function clipCard(c, folder) {
     <div class="player">
       ${c.score != null ? `<span class="badge score">★ ${Number(c.score).toFixed(0)}/10</span>` : ""}
       <span class="badge num">#${c.n}${c.preview ? " · preview" : ""}</span>
-      <video src="${media(c.file)}" controls playsinline preload="metadata"></video>
+      <video src="${media(c.file)}?v=${c.mtime}" controls playsinline preload="metadata"></video>
     </div>
     <div class="clip-b">
       <h3>${esc(c.title)}</h3>
@@ -739,7 +747,8 @@ function clipCard(c, folder) {
         <span>Start</span><b data-v="start"></b><span class="nudge"><button type="button" data-k="start" data-d="-1">−1s</button><button type="button" data-k="start" data-d="1">+1s</button></span>
         <span>End</span><b data-v="end"></b><span class="nudge"><button type="button" data-k="end" data-d="-1">−1s</button><button type="button" data-k="end" data-d="1">+1s</button></span>
       </div>
-      <span class="badge warn" data-stale hidden>Trimmed · render again to see it</span>
+      <button class="btn btn-outline btn-sm btn-cam" type="button" data-cam hidden title="Re-renders this clip with or without the streamer's webcam above the gameplay"><span style="display:inline-flex;align-items:center;gap:8px"><svg class="i"><use href="#i-cam"/></svg>Streamer cam</span><span class="state"></span></button>
+      <span class="badge warn" data-stale hidden>Changed · render again to see it</span>
       <div class="review">
         <button class="btn btn-outline btn-sm btn-approve" type="button" data-review="approved"><svg class="i"><use href="#i-check"/></svg>Keep</button>
         <button class="btn btn-outline btn-sm btn-reject" type="button" data-review="rejected"><svg class="i"><use href="#i-x"/></svg>Reject</button>
@@ -759,6 +768,7 @@ function clipCard(c, folder) {
   v.addEventListener("play", () => document.querySelectorAll("video").forEach(o => o !== v && o.pause()));
   let state = c;
   el.update = c2 => {
+    if (c2.mtime !== state.mtime) { v.src = media(c2.file) + "?v=" + c2.mtime; v.load(); }  // re-rendered
     state = c2;
     el.classList.toggle("approved", c2.review === "approved");
     el.classList.toggle("rejected", c2.review === "rejected");
@@ -768,6 +778,14 @@ function clipCard(c, folder) {
       el.querySelector('[data-v="end"]') && (el.querySelector('[data-v="end"]').textContent = fmtTime(c2.end));
     }
     const st = el.querySelector("[data-stale]"); if (st) st.hidden = !c2.stale;
+    const cam = el.querySelector("[data-cam]");
+    if (cam) {
+      const f = folders.find(x => x.name === current);
+      const on = camOn(c2, f);
+      cam.hidden = f?.cam === false && !c2.facecam;   // this stream has no cam to add
+      cam.setAttribute("aria-pressed", on);
+      cam.querySelector(".state").textContent = on ? "On" : "Off";
+    }
   };
   el.querySelectorAll("[data-review]").forEach(b => b.addEventListener("click", () => {
     const f = folders.find(x => x.name === current);
@@ -777,6 +795,16 @@ function clipCard(c, folder) {
     const f = folders.find(x => x.name === current);
     saveClip(f, state.n, { ["nudge_" + b.dataset.k]: Number(b.dataset.d) });
   }));
+  el.querySelector("[data-cam]")?.addEventListener("click", async () => {
+    const f = folders.find(x => x.name === current);
+    const want = !camOn(state, f);
+    if (!(await saveClip(f, state.n, { facecam: want }))) return;
+    if ($("#runBtn").disabled) { toast("Saved. It'll apply the next time this clip is rendered."); return; }
+    toast(want ? "Adding the streamer cam…" : "Taking the streamer cam out…");
+    // Re-cut just this clip (same quality as now); the per-clip choice beats the form's switch.
+    startRun({ ...formData(), source: "rerender", clips_json: f.recipe, only: [state.n],
+               preview: !!state.preview, dry_run: false, vertical: true });
+  });
   el.querySelector("[data-copy]")?.addEventListener("click", async () => {
     await navigator.clipboard.writeText(c.hook || c.title);
     toast("Caption copied");

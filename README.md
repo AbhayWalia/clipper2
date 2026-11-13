@@ -105,10 +105,30 @@ so about a minute per hour of video, cached in `VIDEO.sounds.json`).
 `pip install panns-inference` to turn it on; the ~330 MB model downloads to `~/panns_data` the
 first time. `--no-sound-tags` (or the switch in the web UI) turns it off.
 
-## Per-streamer facecam layouts
+## Streamer cam (facecam) layouts
 
-Every streamer puts their facecam somewhere different, so each one gets a saved layout
-in `layouts.json`. Boxes are fractions of the frame, so one layout works for any resolution.
+The Shorts look: the streamer's webcam on top, gameplay below, captions on the seam.
+
+**Automatic:** `--facecam auto` (the **Streamer cam** switch in the web UI, on by default)
+finds the cam for you. A few frames go to Claude, which says whether there's a webcam of
+the streamer and where (one call, under a cent). If there is, clips get the split layout; if
+not, a plain 9:16 crop. The answer is stored in `clips.json`, so re-renders and live clips
+don't ask again, and saved as the streamer's layout in `layouts.json`, so their next streams
+don't either. `--no-facecam` (switch off) leaves the cam out even if a layout is saved.
+Each clip card in the web UI also has a **Streamer cam** button: it turns the cam on or off
+for that clip alone and re-renders it (about 10 seconds). The choice is saved in
+`clips.json` (`"facecam": true/false` on the clip) and beats the run's setting from then on.
+
+```bash
+python clipper.py --url https://www.twitch.tv/videos/123456789 --facecam auto --burn-captions
+```
+
+Works with every source: a video, a URL, `--audio-first` (it looks at the downloaded clip
+sections) and `--live`. If the box is off, fix it in `layouts.json` or set it by hand:
+
+**By hand:** every streamer puts their facecam somewhere different, so each one gets a saved
+layout in `layouts.json`. Boxes are fractions of the frame, so one layout works for any
+resolution.
 
 1. Grab a still with a grid on it (white lines every 0.1 of the frame, yellow every 0.05):
    ```bash
@@ -291,6 +311,7 @@ In the output folder:
 | `--upload` / `--upload-vod` | off | Upload the run to S3 or R2 (`clips/`, `recipes/`; `vods/` too). See *Running it as a service* |
 | `--fetch STREAM` | none | Download a stream's run from the bucket into `clips/STREAM/` to re-render it |
 | `--stream` / `--links` | file name / off | Name in the bucket; print 7-day download links after `--upload` |
+| `--facecam auto` / `--no-facecam` | off | Find the streamer's cam and put it above the gameplay / never add it |
 | `--streamer` / `--layouts` | none / layouts.json | Use a saved facecam layout (see above) |
 | `--burn-captions` | off | Word-by-word captions; the spoken word lights up |
 | `--caption-style` | animated | `plain` shows phrases without the highlight |
@@ -346,6 +367,7 @@ In the output folder:
 | `clipfinder/render.py` | ffmpeg: stream copy, re-encode, previews |
 | `clipfinder/captions.py` | Word-by-word captions and the hook banner (ASS) |
 | `clipfinder/layout.py` | Per-streamer facecam layouts and the split-screen filter |
+| `clipfinder/facecam.py` | `--facecam auto`: finding the streamer's cam with Claude |
 | `clipfinder/signals.py` | Audio loudness spikes and chat bursts, and the notes Claude sees |
 | `clipfinder/sounds.py` | Sound detection with PANNs (laughter, gunfire, explosions...) |
 | `clipfinder/stats.py` | Run timing, token usage and cost (prices per model live here) |
@@ -451,4 +473,3 @@ and TikTok, Shorts and Reels give 1080p uploads better quality. Two more savings
   and model changes are measured instead of guessed.
 - Send Claude a few frames from each candidate clip when rescoring, to catch visual moments.
 - Detect GTA HUD events (wanted stars, "Wasted") from the video frames.
-- Detect the facecam box automatically (face detection on a few frames) to speed up layout setup.

@@ -110,8 +110,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     lay.add_argument("--streamer", help="Use this streamer's facecam layout from the layouts file "
                                         "(implies a 9:16 split: facecam + gameplay)")
     lay.add_argument("--layouts", type=Path, default=DEFAULT_LAYOUTS, help="Layouts file")
-    lay.add_argument("--facecam", help="Facecam box x,y,w,h as fractions (0.72,0.03,0.26,0.30) "
-                                       "or pixels; overrides the saved one")
+    lay.add_argument("--facecam", help="Put the streamer's cam above the gameplay. 'auto' finds it "
+                                       "(one Claude call per streamer, then saved), or give the box "
+                                       "x,y,w,h as fractions (0.72,0.03,0.26,0.30) or pixels")
+    lay.add_argument("--no-facecam", action="store_true",
+                     help="Don't add the streamer's cam, even if a layout is saved for them")
     lay.add_argument("--gameplay", help="Gameplay box x,y,w,h (default: whole frame, centre-cropped)")
     lay.add_argument("--cam-height", type=float, help="Share of the 9:16 frame for the facecam (default 0.35)")
     lay.add_argument("--cam-position", choices=["top", "bottom"], help="Facecam above or below gameplay")
@@ -311,9 +314,12 @@ def find_clips(args, segs, vlen, signals=_BUILD):
     return clips
 
 
-def resolve_layout(args, probe: Path) -> Layout | None:
+def resolve_layout(args, probe: Path, quiet: bool = False) -> Layout | None:
     """Layout from --facecam (one-off or saved with --save-layout) or the streamer's saved one.
-    `probe` is a video with the source's frame size (the VOD, or a segment cut from it)."""
+    `probe` is a video with the source's frame size (the VOD, or a segment cut from it).
+    quiet: don't mention a missing saved layout (--facecam auto will look for the cam)."""
+    if args.no_facecam:
+        return None
     saved = load_layouts(args.layouts).get(args.streamer) if args.streamer else None
     if args.facecam or args.gameplay:
         frame = video_size(probe)
@@ -333,7 +339,7 @@ def resolve_layout(args, probe: Path) -> Layout | None:
         if args.cam_position:
             layout.cam_position = args.cam_position
         layout.__post_init__()
-    elif args.streamer:
+    elif args.streamer and not quiet:
         # The name still labels clips for the feedback library; just no split layout.
         print(f"Note: no facecam layout saved for '{args.streamer}' in {args.layouts}, so no "
               f"split screen. Set one up with --grab-frame, then --facecam ... --save-layout.")
@@ -346,6 +352,52 @@ def resolve_layout(args, probe: Path) -> Layout | None:
             sys.exit("--save-layout needs --streamer NAME.")
         save_layout(args.layouts, args.streamer, layout)
         print(f"Saved layout for '{args.streamer}' in {args.layouts}.")
+    return layout
+
+
+def layout_from_manifest(saved: dict) -> Layout | None:
+    """The layout recorded in clips.json by an earlier --facecam auto ({"facecam": null} =
+    looked, found no cam)."""
+    if not saved.get("facecam"):
+        return None
+    try:
+        return Layout(**{k: (tuple(v) if isinstance(v, list) else v) for k, v in saved.items()})
+    except (TypeError, ValueError):
+        return None
+
+
+def detect_layout(args, segments: list[dict] | None, folder: Path, vlen: float | None,
+                  recipe: Path) -> Layout | None:
+    """--facecam auto: ask Claude where the streamer's cam is, from frames of the VOD (or of
+    the clip segments), and remember the answer in clips.json and layouts.json."""
+    from dataclasses import asdict
+    from .facecam import find_facecam, frame_times
+    if segments:
+        if len(segments) == 1:
+            seg = segments[0]
+            sources = [(folder / seg["file"], t) for t in frame_times(seg["end"] - seg["start"])]
+        else:
+            sources = [(folder / s["file"], (s["end"] - s["start"]) / 2) for s in segments[:4]]
+    else:
+        sources = [(args.video, t) for t in frame_times(vlen)]
+    print("Looking for the streamer's cam...")
+    try:
+        box, note = find_facecam(sources, args.model)
+    except Exception as e:  # never block cutting on this
+        print(f"  couldn't look for the cam ({type(e).__name__}: {e}); cutting without it")
+        return None
+    if box is None:
+        print(f"  no streamer cam found ({note}); clips get a plain 9:16 crop")
+        update_manifest(recipe, layout={"facecam": None})
+        return None
+    layout = Layout(facecam=box, cam_height=args.cam_height or 0.35,
+                    cam_position=args.cam_position or "top")
+    print(f"  found it at x={box[0]:.2f} y={box[1]:.2f} w={box[2]:.2f} h={box[3]:.2f} ({note})")
+    update_manifest(recipe, layout={k: (list(v) if isinstance(v, tuple) else v)
+                                    for k, v in asdict(layout).items()})
+    if args.streamer and args.streamer not in load_layouts(args.layouts):
+        save_layout(args.layouts, args.streamer, layout)
+        print(f"  saved as {args.streamer}'s layout in {args.layouts}; edit it there if it's off")
     return layout
 
 
@@ -546,8 +598,30 @@ def main(argv=None, quiet: bool = False) -> None:
 
     if not args.streamer and manifest.get("streamer"):
         args.streamer = manifest["streamer"]
-    layout = resolve_layout(args, probe)
-    if layout:
+    only = {int(x) for x in args.only.split(",") if x.strip()} if args.only else None
+    # Cam on/off chosen per clip in the web UI ("facecam" in clips.json) beats the run's
+    # setting. If a clip being cut wants its cam, find the layout even if the run doesn't.
+    clip_cam = {i: d["facecam"] for i, d in enumerate(manifest.get("clips") or [], 1)
+                if isinstance(d, dict) and isinstance(d.get("facecam"), bool)}
+    forced = any(v for i, v in clip_cam.items() if only is None or i in only)
+    run_no_cam, want_auto = args.no_facecam, args.facecam == "auto"
+    if forced:
+        args.no_facecam = False
+    # --facecam auto: a saved layout for the streamer wins, then one found on an earlier run
+    # of this clips.json; otherwise the cam is looked for just before cutting.
+    auto_cam = (want_auto or forced) and not args.no_facecam
+    if args.facecam == "auto":
+        args.facecam = None
+    layout = resolve_layout(args, probe, quiet=auto_cam)
+    args.no_facecam = run_no_cam
+    # Whether clips without their own choice get the cam.
+    default_cam = not run_no_cam and (want_auto or layout is not None)
+    if layout is None and auto_cam and isinstance(manifest.get("layout"), dict):
+        layout = layout_from_manifest(manifest["layout"])
+        auto_cam = False  # already decided for this video (cam or no cam)
+    elif layout is not None:
+        auto_cam = False
+    if layout or auto_cam:
         args.vertical = True
     if args.save_layout and not (args.transcript or args.transcribe or args.clips_json):
         return  # just saving a layout
@@ -614,7 +688,6 @@ def main(argv=None, quiet: bool = False) -> None:
         segments = new
         print(f"  saved to {folder / 'segments'}; {recipe} can now re-render without the VOD.")
 
-    only = {int(x) for x in args.only.split(",") if x.strip()} if args.only else None
     if sections:
         spans = [(max(c.start - args.pad_before, 0.0),
                   min(c.end + args.pad_after, vlen) if vlen else c.end + args.pad_after)
@@ -624,6 +697,10 @@ def main(argv=None, quiet: bool = False) -> None:
         if not segments:
             sys.exit("None of the clip sections could be downloaded, so there's nothing to cut.")
         probe = folder / segments[0]["file"]
+
+    if auto_cam:
+        layout = detect_layout(args, segments if use_segments else None, folder, vlen,
+                               args.clips_json or args.out / "clips.json")
 
     burn = args.burn_captions and bool(segs)
     if args.burn_captions and not segs:
@@ -647,7 +724,9 @@ def main(argv=None, quiet: bool = False) -> None:
     dest = args.out / "previews" if mode == "preview" else args.out
     dest.mkdir(parents=True, exist_ok=True)
     how = {"copy": "stream copy (no re-encode)", "preview": "480p previews",
-           "encode": encoder}[mode] + (f", {args.streamer or 'custom'} facecam layout" if layout else "")
+           "encode": encoder}[mode]
+    if layout and (default_cam or forced):
+        how += f", {args.streamer or 'custom'} facecam layout"
     print(f"\nCutting clips with {how} ({args.jobs} at a time)...")
 
     jobs = []
@@ -682,17 +761,18 @@ def main(argv=None, quiet: bool = False) -> None:
             else:
                 start = key
         base = dest / f"{i:02d}_{slugify(c.title)}"
+        clip_layout = layout if clip_cam.get(i, default_cam) else None
         if segs:
             write_clip_srt(base.with_suffix(".srt"), segs, start, end)
         ass = None
         if overlay:
             ass = base.with_suffix(".ass")
             build_ass(ass, segs, start, end, frame, style, captions=burn,
-                      caption_y=layout.seam() if layout else None,
+                      caption_y=clip_layout.seam() if clip_layout else None,
                       hook=c.hook if args.hook_overlay else None,
                       hook_seconds=args.hook_seconds)
         jobs.append((src, base.with_suffix(".mp4"), start - offset, end - offset, clip_mode,
-                     args.vertical, ass, clip_encoder, layout))
+                     args.vertical, ass, clip_encoder, clip_layout))
     from .render import run_cut_jobs
     with STATS.stage("cut"):
         saved, failed = run_cut_jobs(jobs, args.jobs)
