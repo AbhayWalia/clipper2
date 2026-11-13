@@ -23,7 +23,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from . import results
 from .clips import write_json
+from .layout import Layout, load_layouts, save_layout
 from .render import slugify
 
 ROOT = Path.cwd().resolve()
@@ -34,6 +36,7 @@ CLIP_NAME = re.compile(r"^(\d+)_.*\.mp4$")
 PROMPT_FILE = ROOT / "prompt.txt"  # the clip-finding prompt, editable from the UI
 RECIPE_LOCK = threading.Lock()
 WHISPER_MODELS = {"small", "turbo", "medium", "large-v3"}
+CLAUDE_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"}  # what the form offers
 LIVE_FRESH = 300  # a live session not heard from for this long has stopped (crashed or killed)
 
 
@@ -133,10 +136,6 @@ def build_command(f: dict) -> tuple[list[str], str]:
         args += ["--live", text("live_url")]
         if f.get("keep_recording") is True:
             args.append("--keep-recording")
-        if text("whisper_model"):
-            if text("whisper_model") not in WHISPER_MODELS:
-                raise ValueError("Unknown Whisper model.")
-            args += ["--whisper-model", text("whisper_model")]
     elif source == "rerender":
         if not text("clips_json"):
             raise ValueError("Pick a clips.json to re-render.")
@@ -146,6 +145,16 @@ def build_command(f: dict) -> tuple[list[str], str]:
     else:
         raise ValueError("Choose a source.")
 
+    if source != "rerender":
+        if text("whisper_model"):  # used when there are no captions to borrow
+            if text("whisper_model") not in WHISPER_MODELS:
+                raise ValueError("Unknown Whisper model.")
+            args += ["--whisper-model", text("whisper_model")]
+        for key, flag in (("model", "--model"), ("first_pass", "--triage-model")):
+            if text(key):
+                if text(key) not in CLAUDE_MODELS:
+                    raise ValueError("Unknown Claude model.")
+                args += [flag, text(key)]
     for key, flag in (("streamer", "--streamer"), ("context", "--context"),
                       ("effort", "--effort"), ("chat", "--chat")):
         if text(key):
@@ -186,8 +195,9 @@ def safe_path(rel: str) -> Path | None:
     return p if p.is_relative_to(ROOT) else None
 
 
-def folder_clips(folder: Path) -> list[dict]:
-    """Clips in a folder (and its previews/), matched to clips.json by their number."""
+def folder_clips(folder: Path, lib: dict | None = None) -> list[dict]:
+    """Clips in a folder (and its previews/), matched to clips.json by their number.
+    lib: the feedback library, to show how posted clips did."""
     meta: dict = {}
     recipe = folder / "clips.json"
     if recipe.is_file():
@@ -220,6 +230,8 @@ def folder_clips(folder: Path) -> list[dict]:
                 "reason": c.get("reason"), "start": c.get("start"), "end": c.get("end"),
                 "srt": mp4.with_suffix(".srt").is_file(), "matched": bool(c),
                 "review": c.get("review"), "facecam": c.get("facecam"), "music": c.get("music") or 0,
+                "has_id": bool(c.get("id")),
+                "results": results.clip_stats(lib, c, meta.get("video")) if (lib and c) else None,
                 # Trimmed after this video was made: it no longer matches the new edges.
                 "stale": bool(c.get("edited_at")) and c["edited_at"] > mp4.stat().st_mtime,
             })
@@ -262,10 +274,30 @@ def live_state(meta: dict) -> dict | None:
             "analysed": live.get("analysed"), "age": round(age) if age != float("inf") else None}
 
 
+def folder_layout(meta: dict) -> dict | None:
+    """The cam layout clips in this folder are cut with: the streamer's saved one (it wins
+    in the clipper too), else the one found for this video."""
+    streamer = meta.get("streamer")
+    if streamer:
+        try:
+            saved = load_layouts(ROOT / "layouts.json").get(streamer)
+        except (OSError, ValueError, TypeError):
+            saved = None
+        if saved:
+            return {"facecam": list(saved.facecam), "cam_height": saved.cam_height,
+                    "cam_position": saved.cam_position, "from": "streamer"}
+    lay = meta.get("layout")
+    if isinstance(lay, dict) and lay.get("facecam"):
+        return {"facecam": lay["facecam"], "cam_height": lay.get("cam_height", 0.35),
+                "cam_position": lay.get("cam_position", "top"), "from": "video"}
+    return None
+
+
 def library() -> list[dict]:
     folders = []
+    lib = results.fb.load_library(results.library_path(ROOT))
     for d in run_folders():
-        clips = folder_clips(d)
+        clips = folder_clips(d, lib)
         recipe = d / "clips.json"
         if not clips and not recipe.is_file():
             continue
@@ -281,6 +313,7 @@ def library() -> list[dict]:
         folders.append({"name": d.relative_to(ROOT).as_posix(), "label": d.name,
                         # streamer cam: True found, False looked and there isn't one, None not looked
                         "cam": (bool(lay.get("facecam")) if isinstance(lay, dict) else None),
+                        "layout": folder_layout(meta), "streamer": meta.get("streamer"),
                         "live": live_state(meta),
                         "source_url": meta.get("source_url") if not meta.get("video") else None,
                         "sections": len(meta.get("segments") or []),
@@ -339,6 +372,56 @@ def update_clip(form: dict) -> dict:
         write_json(recipe, data)
     return {"start": c["start"], "end": c["end"], "review": c.get("review"),
             "facecam": c.get("facecam")}
+
+
+def recipe_path(rel) -> Path:
+    recipe = safe_path(str(rel or ""))
+    if not recipe or recipe.name != "clips.json" or not recipe.is_file():
+        raise ValueError("Clip list not found.")
+    return recipe
+
+
+def frame_for(recipe: Path) -> bytes:
+    """A still of the source (full frame), for drawing the cam box on: from the VOD if it's
+    still there, else from a saved clip segment (audio-first and live runs)."""
+    meta = json.loads(recipe.read_text(encoding="utf-8"))
+    video, segs = meta.get("video"), meta.get("segments") or []
+    if video and Path(video).is_file():
+        clips = meta.get("clips") or []
+        src, t = Path(video), (clips[0]["start"] + 5 if clips else 60.0)
+    elif segs and (recipe.parent / segs[0]["file"]).is_file():
+        src, t = recipe.parent / segs[0]["file"], (segs[0]["end"] - segs[0]["start"]) / 2
+    else:
+        raise ValueError("There's no video left to take a frame from (the source and clip "
+                         "segments are gone).")
+    out = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(src),
+                          "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "3", "-f", "mjpeg", "-"],
+                         capture_output=True)
+    if out.returncode or not out.stdout:
+        raise ValueError("Couldn't read a frame from the video.")
+    return out.stdout
+
+
+def save_folder_layout(form: dict) -> dict:
+    """Cam box drawn in the UI: saved for this video, and as the streamer's layout (which
+    the clipper prefers) when the run knows the streamer."""
+    recipe = recipe_path(form.get("recipe"))
+    box = form.get("facecam")
+    if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
+        raise ValueError("Draw the cam box first.")
+    layout = Layout(facecam=tuple(float(v) for v in box),
+                    cam_height=float(form.get("cam_height") or 0.35),
+                    cam_position=str(form.get("cam_position") or "top"))
+    stored = {"facecam": list(layout.facecam), "gameplay": list(layout.gameplay),
+              "cam_height": layout.cam_height, "cam_position": layout.cam_position}
+    with RECIPE_LOCK:
+        data = json.loads(recipe.read_text(encoding="utf-8"))
+        data["layout"] = stored
+        write_json(recipe, data)
+    streamer = data.get("streamer")
+    if streamer:
+        save_layout(ROOT / "layouts.json", streamer, layout)
+    return {**stored, "streamer": streamer}
 
 
 def get_prompt() -> dict:
@@ -403,6 +486,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(inputs())
         if url.path == "/api/prompt":
             return self.send_json(get_prompt())
+        if url.path == "/api/results":
+            return self.send_json(results.summary(ROOT))
+        if url.path == "/api/frame":
+            from urllib.parse import parse_qs
+            try:
+                data = frame_for(recipe_path((parse_qs(url.query).get("recipe") or [""])[0]))
+            except (ValueError, OSError, KeyError) as e:
+                return self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if url.path == "/api/job":
             since = int((url.query.partition("since=")[2] or "0").split("&")[0] or 0)
             return self.send_json(JOB.state(since) if JOB else None)
@@ -430,6 +528,20 @@ class Handler(BaseHTTPRequestHandler):
                                           HTTPStatus.BAD_REQUEST)
                 JOB = Job(cmd, out)
             return self.send_json(JOB.state())
+        actions = {
+            "/api/layout": lambda: save_folder_layout(form),
+            "/api/results": lambda: results.record(ROOT, recipe_path(form.get("recipe")),
+                                                   form.get("n"), form),
+            "/api/results/import": lambda: results.import_csv(
+                ROOT, str(form.get("csv") or ""), str(form.get("platform") or "tiktok"),
+                [d / "clips.json" for d in run_folders() if (d / "clips.json").is_file()]),
+            "/api/results/train": lambda: results.train(ROOT),
+        }
+        if self.path in actions:
+            try:
+                return self.send_json(actions[self.path]())
+            except (ValueError, TypeError, KeyError) as e:
+                return self.send_json({"error": str(e) or "Bad request"}, HTTPStatus.BAD_REQUEST)
         if self.path in ("/api/clip", "/api/prompt"):
             try:
                 return self.send_json(update_clip(form) if self.path == "/api/clip" else save_prompt(form))

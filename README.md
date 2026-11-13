@@ -88,6 +88,19 @@ It reads `ANTHROPIC_API_KEY` from `.env` or `../.env` if it isn't set.
 - **Review:** on each clip, Keep or Reject it and nudge its start/end by a second. Choices are
   saved in `clips.json` (`review`, plus `original_start`/`original_end` when trimmed). **Render
   approved** cuts only the kept clips at full quality (`--only 2,5,7` on the command line).
+- **Results:** after posting a clip, **Log results** on its card saves its views and average
+  watch time per platform (update them as they grow); the card then shows them. The
+  **Results** button lists every posted clip, best first, imports a CSV of stats, and trains
+  the re-ranker once 30 clips have results. Same `library.json` / `ranker.json` as
+  `python feedback.py` (see [Learning from posted clips](#learning-from-posted-clips)).
+- **Cam layout:** if the streamer cam box is off, **Cam layout** in a folder's toolbar shows a
+  frame from the stream with the box on it: drag or resize it, pick cam on top or bottom and
+  its size, watch the 9:16 preview, then save (as the streamer's layout when the run knows
+  the streamer) and optionally re-render the clips.
+- **Models:** More options picks the Claude model (Sonnet 5.5, or Opus 5.5 at twice the
+  price), an optional Haiku **first pass** (it reads the whole stream; the main model only
+  re-scores its best finds, much cheaper on long streams), and the Whisper model used when a
+  stream has no captions.
 - **Prompt:** the Prompt button edits what Claude looks for. It's saved to `prompt.txt` and
   every new run uses it (`--prompt-file prompt.txt`); Reset goes back to the built-in one.
 - **Cost and time:** every run prints its time per stage and Claude cost, and records them in

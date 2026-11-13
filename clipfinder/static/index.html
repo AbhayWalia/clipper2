@@ -238,6 +238,37 @@
   .dlg-f .spacer { flex: 1; }
   .dlg-f small { color: var(--fg-faint); font-size: 12px; }
 
+  /* Results, cam layout */
+  .dlg-b { padding: 0 24px 4px; display: flex; flex-direction: column; gap: 14px; overflow: auto; }
+  .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .meter { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: var(--fg-muted); }
+  .meter b { display: block; color: var(--fg); font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .bar { height: 6px; border-radius: 99px; background: var(--muted); overflow: hidden; margin-top: 6px; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .bar.ok i { background: var(--ok); }
+  table.res { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.res th { text-align: left; font-weight: 500; color: var(--fg-faint); padding: 6px 8px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--card); }
+  table.res td { padding: 7px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  table.res td.t { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+  .res-wrap { max-height: 300px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .pos { color: var(--ok); } .neg { color: var(--bad); }
+  pre.out { margin: 0; font: 12px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; color: var(--fg-muted);
+            background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .clip-f .btn-icon { flex: none; width: 30px; padding: 0; }
+  .cam-grid { display: grid; grid-template-columns: 1fr 170px; gap: 16px; align-items: start; }
+  @media (max-width: 700px) { .cam-grid { grid-template-columns: 1fr; } }
+  .frame-wrap { position: relative; border-radius: 8px; overflow: hidden; background: #000; touch-action: none;
+                user-select: none; cursor: crosshair; aspect-ratio: 16 / 9; }
+  .frame-wrap img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+  .cam-box { position: absolute; border: 2px solid #22c55e; box-shadow: 0 0 0 9999px rgba(0,0,0,.45); cursor: move; }
+  .cam-box span { position: absolute; width: 12px; height: 12px; background: #22c55e; border-radius: 3px; }
+  .cam-box [data-h=nw] { left: -7px; top: -7px; cursor: nwse-resize; } .cam-box [data-h=ne] { right: -7px; top: -7px; cursor: nesw-resize; }
+  .cam-box [data-h=sw] { left: -7px; bottom: -7px; cursor: nesw-resize; } .cam-box [data-h=se] { right: -7px; bottom: -7px; cursor: nwse-resize; }
+  .cam-side { display: flex; flex-direction: column; gap: 12px; font-size: 12px; color: var(--fg-muted); }
+  .cam-side canvas { width: 170px; height: 302px; border-radius: 8px; background: #000; border: 1px solid var(--border); }
+  .cam-side input[type=range] { width: 100%; accent-color: var(--accent); }
+
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translate(-50%, 20px); opacity: 0;
            background: var(--primary); color: var(--primary-fg); padding: 10px 16px; border-radius: 8px;
            font-size: 13px; font-weight: 500; transition: all .2s; pointer-events: none; z-index: 50; }
@@ -264,6 +295,8 @@
   <symbol id="i-dollar" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
   <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></symbol>
   <symbol id="i-cam" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></symbol>
+  <symbol id="i-frame" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="6" width="6" height="5" rx="1"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
 </svg>
 
@@ -273,6 +306,7 @@
     Clipper
   </div>
   <div class="spacer"></div>
+  <button class="btn btn-ghost btn-sm" id="resultsBtn" type="button"><svg class="i"><use href="#i-chart"/></svg>Results</button>
   <button class="btn btn-ghost btn-sm" id="promptBtn" type="button"><svg class="i"><use href="#i-pen"/></svg>Prompt<span id="promptTag" class="badge" style="height:18px;font-size:11px" hidden>custom</span></button>
   <span id="keyBadge" class="badge" hidden></span>
 </header>
@@ -313,14 +347,6 @@
         <div data-for="live" hidden>
           <label class="f">Live channel <small>Clips appear a few minutes after each moment while the stream is on</small>
             <input class="input" name="live_url" placeholder="https://www.twitch.tv/name">
-          </label>
-        </div>
-        <div data-for="live" hidden>
-          <label class="f">Transcription
-            <select class="input" name="whisper_model">
-              <option value="small">Whisper small: fastest</option>
-              <option value="turbo">Whisper turbo: more accurate (1.6 GB download once)</option>
-            </select>
           </label>
         </div>
         <div data-for="live" hidden>
@@ -368,6 +394,27 @@
               <label class="f">Lead-in (s) <input class="input" name="pad_before" type="number" min="0" step="0.5" value="1.5"></label>
               <label class="f">Tail (s) <input class="input" name="pad_after" type="number" min="0" step="0.5" value="1.5"></label>
             </div>
+            <div class="row" data-ai>
+              <label class="f">Claude model
+                <select class="input" name="model">
+                  <option value="claude-sonnet-5-5" selected>Sonnet 5.5</option>
+                  <option value="claude-opus-5-5">Opus 5.5: best, 2x price</option>
+                </select>
+              </label>
+              <label class="f">First pass
+                <select class="input" name="first_pass">
+                  <option value="" selected>None</option>
+                  <option value="claude-haiku-5-5">Haiku scans first</option>
+                </select>
+              </label>
+            </div>
+            <p class="hint" data-ai style="margin:-8px 0 0;font-size:12px;color:var(--fg-faint)">With a first pass, cheap Haiku reads the whole stream and the model above only re-scores its best finds. Much cheaper on long streams.</p>
+            <label class="f" data-ai>Transcription <small>Used when the stream has no captions (always for Live)</small>
+              <select class="input" name="whisper_model">
+                <option value="small">Whisper small: fastest</option>
+                <option value="turbo">Whisper turbo: more accurate (1.6 GB download once)</option>
+              </select>
+            </label>
             <label class="f" data-ai>Effort
               <select class="input" name="effort">
                 <option value="low">Low: fastest, cheapest</option>
@@ -426,6 +473,7 @@
       </div>
       <span class="stat" id="costStat" hidden></span>
       <div class="spacer"></div>
+      <button class="btn btn-outline btn-sm" id="camLayoutBtn" type="button" hidden><svg class="i"><use href="#i-frame"/></svg>Cam layout</button>
       <button class="btn btn-primary btn-sm" id="renderApproved" type="button" hidden><svg class="i"><use href="#i-scissors"/></svg><span></span></button>
     </div>
     <div class="banner live" id="liveBanner" hidden>
@@ -467,6 +515,84 @@
   </form>
 </dialog>
 
+<dialog id="resultDlg">
+  <form method="dialog" id="resultForm">
+    <div class="dlg-h"><div><h2>How did this clip do?</h2><p id="resultFor"></p></div></div>
+    <div class="dlg-b">
+      <div class="row">
+        <label class="f">Platform
+          <select class="input" name="platform">
+            <option value="tiktok">TikTok</option><option value="youtube">YouTube Shorts</option>
+            <option value="instagram">Instagram Reels</option><option value="other">Other</option>
+          </select>
+        </label>
+        <label class="f">Link <small>optional</small><input class="input" name="url" placeholder="https://…"></label>
+      </div>
+      <div class="row">
+        <label class="f">Views<input class="input" name="views" inputmode="numeric" placeholder="12,400"></label>
+        <label class="f">Average watch time (s) <small>from analytics</small><input class="input" name="avg_watch" inputmode="decimal" placeholder="14.5"></label>
+      </div>
+      <div class="row3">
+        <label class="f">Likes<input class="input" name="likes" inputmode="numeric"></label>
+        <label class="f">Comments<input class="input" name="comments" inputmode="numeric"></label>
+        <label class="f">Shares<input class="input" name="shares" inputmode="numeric"></label>
+      </div>
+      <p style="margin:0;font-size:12px;color:var(--fg-faint)">Come back and update the numbers as they grow. Average watch time matters most: it's how the clipper learns which moments hold people.</p>
+    </div>
+    <div class="dlg-f"><small id="resultMsg" style="color:var(--bad)"></small><div class="spacer"></div>
+      <button class="btn btn-outline btn-sm" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary btn-sm" type="button" id="resultSave">Save</button></div>
+  </form>
+</dialog>
+
+<dialog id="resultsDlg">
+  <form method="dialog">
+    <div class="dlg-h"><div><h2>Results</h2><p>How your posted clips did. The clipper learns from these: the best and worst become examples for Claude, and a re-ranker can learn what your audience watches.</p></div></div>
+    <div class="dlg-b">
+      <div class="meters">
+        <div class="meter"><b>Examples for Claude</b><span id="mEx"></span><div class="bar" id="mExBar"><i></i></div></div>
+        <div class="meter"><b>Re-ranker</b><span id="mTr"></span><div class="bar" id="mTrBar"><i></i></div></div>
+      </div>
+      <div class="res-wrap" id="resWrap"><table class="res"><thead><tr><th>Clip</th><th>Streamer</th><th>Views</th><th>Watched</th><th title="Claude's score">AI</th><th title="Views compared with that streamer's typical clip">vs typical</th></tr></thead><tbody id="resRows"></tbody></table></div>
+      <p id="resEmpty" style="margin:0;font-size:13px;color:var(--fg-muted)" hidden>No results yet. Use <b>Log results</b> on a clip after you post it, or import a CSV below.</p>
+      <details class="adv"><summary><svg class="i"><use href="#i-chev"/></svg>Import a CSV</summary>
+        <div>
+          <p style="margin:0;font-size:12px;color:var(--fg-faint)">Columns: <code>clip</code> (the clip id from clips.json), <code>views</code>, and optionally <code>platform, url, avg_watch, likes, comments, shares</code>.</p>
+          <textarea class="input" id="csvText" rows="5" spellcheck="false" placeholder="clip,platform,views,avg_watch&#10;stream-3fa94c1e@612.4,tiktok,48000,17.2"></textarea>
+          <div class="row"><select class="input" id="csvPlatform"><option value="tiktok">Default platform: TikTok</option><option value="youtube">YouTube Shorts</option><option value="instagram">Instagram Reels</option></select>
+            <button class="btn btn-outline btn-sm" type="button" id="csvImport" style="height:36px">Import</button></div>
+          <pre class="out" id="csvOut" hidden></pre>
+        </div>
+      </details>
+      <pre class="out" id="trainOut" hidden></pre>
+    </div>
+    <div class="dlg-f"><small id="rankerState"></small><div class="spacer"></div>
+      <button class="btn btn-outline btn-sm" type="button" data-close>Close</button>
+      <button class="btn btn-primary btn-sm" type="button" id="trainBtn">Train re-ranker</button></div>
+  </form>
+</dialog>
+
+<dialog id="camDlg">
+  <form method="dialog">
+    <div class="dlg-h"><div><h2>Streamer cam layout</h2><p id="camFor">Drag the green box over the webcam (drag a corner to resize, or drag anywhere to draw a new one).</p></div></div>
+    <div class="dlg-b">
+      <div class="cam-grid">
+        <div class="frame-wrap" id="frameWrap"><img id="frameImg" alt="A frame from the stream"><div class="cam-box" id="camBox"><span data-h="nw"></span><span data-h="ne"></span><span data-h="sw"></span><span data-h="se"></span></div></div>
+        <div class="cam-side">
+          <canvas id="camPreview" width="340" height="604"></canvas>
+          <div class="seg" id="camPos"><button type="button" data-p="top" aria-pressed="true">Cam on top</button><button type="button" data-p="bottom" aria-pressed="false">Bottom</button></div>
+          <label>Cam size: <b id="camHVal"></b><input type="range" id="camH" min="20" max="55" step="1"></label>
+        </div>
+      </div>
+      <p id="camMsg" style="margin:0;font-size:12px;color:var(--fg-faint)"></p>
+    </div>
+    <div class="dlg-f"><div class="spacer"></div>
+      <button class="btn btn-outline btn-sm" type="button" data-close>Cancel</button>
+      <button class="btn btn-outline btn-sm" type="button" id="camSave">Save</button>
+      <button class="btn btn-primary btn-sm" type="button" id="camSaveRender">Save &amp; re-render clips</button></div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -476,6 +602,14 @@ const fmtTime = t => { t = Math.max(0, Math.round(t)); const h = Math.floor(t/36
   return (h ? h + ":" + String(m).padStart(2,"0") : m) + ":" + String(s).padStart(2,"0"); };
 const fmtSize = b => b > 1e9 ? (b/1e9).toFixed(1) + " GB" : (b/1e6).toFixed(b > 1e7 ? 0 : 1) + " MB";
 const media = p => "/media/" + p.split("/").map(encodeURIComponent).join("/");
+const fmtNum = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? (n / 1e3).toFixed(1).replace(/\.0$/, "") + "k" : String(n);
+const postJSON = async (url, body) => {
+  const res = await fetch(url, { method: "POST", body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Something went wrong");
+  return data;
+};
+document.querySelectorAll("dialog [data-close]").forEach(b => b.addEventListener("click", () => b.closest("dialog").close()));
 
 function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.classList.add("show");
@@ -670,6 +804,7 @@ function renderGrid() {
   cost.innerHTML = `<svg class="i"><use href="#i-dollar"/></svg>` + parts.join(" · ");
   cost.title = lr ? Object.entries(lr.seconds || {}).map(([k, v]) => `${k}: ${fmtDur(v)}`).join("\n") +
     (lr.tokens ? `\n${(lr.tokens.input + lr.tokens.cache_read + lr.tokens.cache_write).toLocaleString()} input / ${lr.tokens.output.toLocaleString()} output tokens` : "") : "";
+  $("#camLayoutBtn").hidden = !f?.recipe || !all.some(c => c.matched) || !!f?.live?.active;
   const ra = $("#renderApproved");
   ra.hidden = !f?.approved?.length;
   if (f?.approved?.length) ra.querySelector("span").textContent = `Render ${f.approved.length} approved`;
@@ -738,6 +873,7 @@ function clipCard(c, folder) {
       ${c.hook ? `<p class="hook">“${esc(c.hook.replace(/^["“'\s]+|["”'\s]+$/g, ""))}”</p>` : ""}
       <div class="meta">
         ${c.category ? `<span class="badge cat">${esc(c.category)}</span>` : ""}
+        <span class="badge ok" data-res hidden></span>
         ${c.music >= 0.25 ? `<span class="badge warn" title="Music plays through ${Math.round(c.music * 100)}% of this clip. If it's the in-game radio, the song is copyrighted: Twitch mutes it and YouTube/TikTok may claim the clip. Trim it out or swap the audio before posting.">♪ Music ${Math.round(c.music * 100)}%</span>` : ""}
         ${c.start != null ? `<span>${fmtTime(c.start)} → ${fmtTime(c.end)}</span><span>·</span><span class="len">${Math.round(len)}s</span>` : `<span class="len"></span>`}
         <span>${fmtSize(c.size)}</span>
@@ -757,7 +893,8 @@ function clipCard(c, folder) {
     </div>
     <div class="clip-f">
       <a class="btn btn-outline btn-sm" href="${media(c.file)}?download" download><svg class="i"><use href="#i-download"/></svg>Download</a>
-      ${c.hook || c.title ? `<button class="btn btn-ghost btn-sm" type="button" data-copy><svg class="i"><use href="#i-copy"/></svg>Copy caption</button>` : ""}
+      ${c.matched ? `<button class="btn btn-outline btn-sm" type="button" data-results ${c.has_id ? "" : 'disabled title="This clip is from an old run without clip ids; find clips again to log results"'}><svg class="i"><use href="#i-chart"/></svg>Log results</button>` : ""}
+      ${c.hook || c.title ? `<button class="btn btn-ghost btn-sm btn-icon" type="button" data-copy title="Copy caption" aria-label="Copy caption"><svg class="i"><use href="#i-copy"/></svg></button>` : ""}
     </div>`;
   const v = el.querySelector("video");
   v.addEventListener("loadedmetadata", () => {
@@ -779,6 +916,12 @@ function clipCard(c, folder) {
       el.querySelector('[data-v="end"]') && (el.querySelector('[data-v="end"]').textContent = fmtTime(c2.end));
     }
     const st = el.querySelector("[data-stale]"); if (st) st.hidden = !c2.stale;
+    const rb = el.querySelector("[data-res]");
+    rb.hidden = !c2.results;
+    if (c2.results) {
+      rb.textContent = `▲ ${fmtNum(c2.results.views)} views` + (c2.results.retention ? ` · ${Math.round(c2.results.retention * 100)}% watched` : "");
+      rb.title = Object.entries(c2.results.posts).map(([p, s]) => `${p}: ${fmtNum(s.views || 0)} views` + (s.avg_watch ? `, ${s.avg_watch}s average watch` : "")).join("\n");
+    }
     const cam = el.querySelector("[data-cam]");
     if (cam) {
       const f = folders.find(x => x.name === current);
@@ -806,6 +949,7 @@ function clipCard(c, folder) {
     startRun({ ...formData(), source: "rerender", clips_json: f.recipe, only: [state.n],
                preview: !!state.preview, dry_run: false, vertical: true });
   });
+  el.querySelector("[data-results]")?.addEventListener("click", () => openResult(state));
   el.querySelector("[data-copy]")?.addEventListener("click", async () => {
     await navigator.clipboard.writeText(c.hook || c.title);
     toast("Caption copied");
@@ -863,6 +1007,165 @@ $("#promptText").addEventListener("input", () => {
 $("#reloadBtn").addEventListener("click", () => { loadLibrary(); loadInputs(); });
 // Live sessions (from here or the command line) keep adding clips: refresh while one is on.
 setInterval(() => { if (!polling && folders.some(f => f.live?.active)) loadLibrary(); }, 8000);
+
+// ---------- Results (how posted clips did) ----------
+let resultClip = null;
+function openResult(c) {
+  resultClip = c;
+  const f = $("#resultForm");
+  $("#resultFor").textContent = `#${c.n} ${c.title}`;
+  $("#resultMsg").textContent = "";
+  const fill = () => {
+    const s = c.results?.posts?.[f.platform.value] || {};
+    for (const k of ["url", "views", "avg_watch", "likes", "comments", "shares"]) f[k].value = s[k] ?? "";
+  };
+  // Start on the platform it was last logged for, if any.
+  const logged = Object.keys(c.results?.posts || {});
+  if (logged.length) f.platform.value = logged[0];
+  f.platform.onchange = fill; fill();
+  $("#resultDlg").showModal();
+}
+$("#resultSave").addEventListener("click", async () => {
+  const f = $("#resultForm"), folder = folders.find(x => x.name === current);
+  const body = { recipe: folder.recipe, n: resultClip.n };
+  for (const k of ["platform", "url", "views", "avg_watch", "likes", "comments", "shares"]) body[k] = f[k].value.trim();
+  try {
+    const r = await postJSON("/api/results", body);
+    $("#resultDlg").close();
+    toast(`Saved. ${r.with_stats} clip${r.with_stats === 1 ? "" : "s"} with results so far`);
+    loadLibrary();
+  } catch (e) { $("#resultMsg").textContent = e.message; }
+});
+
+async function showResults() {
+  const d = await (await fetch("/api/results")).json();
+  const meter = (id, n, need, done) => {
+    $(id).textContent = n >= need ? done : `${n} of ${need} clips with results`;
+    const bar = $(id + "Bar"); bar.classList.toggle("ok", n >= need);
+    bar.querySelector("i").style.width = Math.min(100, n / need * 100) + "%";
+  };
+  meter("#mEx", d.with_stats, d.min_examples, `On: Claude sees your ${Math.min(d.with_stats, 11)} best and worst clips`);
+  meter("#mTr", d.with_stats, d.min_train, d.with_stats >= d.good_train ? "Enough data to train well" : `Can train now (better with ${d.good_train}+)`);
+  const r = d.ranker;
+  $("#rankerState").textContent = !r ? "No re-ranker trained yet"
+    : !r.current ? "Re-ranker is out of date: train it again"
+    : `Re-ranker ${r.enabled ? "ON" : "OFF (doesn't beat Claude yet)"} · trained on ${r.trained_on} clips, ${r.trained}`;
+  $("#trainBtn").disabled = d.with_stats < d.min_train;
+  $("#trainBtn").title = d.with_stats < d.min_train ? `Needs ${d.min_train} clips with results` : "";
+  $("#resEmpty").hidden = d.entries.length > 0; $("#resWrap").hidden = !d.entries.length;
+  $("#resRows").innerHTML = d.entries.map(e => `<tr>
+    <td class="t" title="${esc(e.title)}">${esc(e.title)}</td><td>${esc(e.streamer || "-")}</td>
+    <td>${fmtNum(e.views)}</td><td>${e.retention != null ? Math.round(e.retention * 100) + "%" : "-"}</td>
+    <td>${e.claude_score ?? "-"}</td><td class="${e.vs_typical >= 0 ? "pos" : "neg"}">${e.vs_typical >= 0 ? "+" : ""}${e.vs_typical.toFixed(2)}</td></tr>`).join("");
+}
+$("#resultsBtn").addEventListener("click", async () => {
+  $("#trainOut").hidden = true; $("#csvOut").hidden = true;
+  await showResults(); $("#resultsDlg").showModal();
+});
+$("#csvImport").addEventListener("click", async () => {
+  const out = $("#csvOut"); out.hidden = false;
+  try {
+    const r = await postJSON("/api/results/import", { csv: $("#csvText").value, platform: $("#csvPlatform").value });
+    out.textContent = r.log; showResults(); loadLibrary();
+  } catch (e) { out.textContent = e.message; }
+});
+$("#trainBtn").addEventListener("click", async () => {
+  const out = $("#trainOut"); out.hidden = false; out.textContent = "Training…";
+  try {
+    const r = await postJSON("/api/results/train", {});
+    out.textContent = `Trained on ${r.trained_on} clips. How well each ranks clips it hasn't seen:\n` +
+      `  Claude's score alone: ${r.baseline_spearman.toFixed(3)}\n` +
+      `  re-ranker:            ${r.cv_spearman.toFixed(3)}\n` +
+      (r.enabled ? "It beats Claude's score, so new runs will use it." : "It doesn't beat Claude's score yet, so it stays off. Log more results and train again.") +
+      `\nStrongest factors: ${r.factors.map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`).join(", ")}`;
+    showResults();
+  } catch (e) { out.textContent = e.message; }
+});
+
+// ---------- Cam layout editor ----------
+const cam = { box: [0.7, 0.03, 0.27, 0.27], height: 0.35, pos: "top", folder: null };
+const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+function drawCam() {
+  const b = $("#camBox"), [x, y, w, h] = cam.box;
+  Object.assign(b.style, { left: x * 100 + "%", top: y * 100 + "%", width: w * 100 + "%", height: h * 100 + "%" });
+  document.querySelectorAll("#camPos button").forEach(btn => btn.setAttribute("aria-pressed", btn.dataset.p === cam.pos));
+  $("#camH").value = Math.round(cam.height * 100); $("#camHVal").textContent = Math.round(cam.height * 100) + "%";
+  // Preview of the 9:16 result, the way the clipper builds it: each part fills its area, centre-cropped.
+  const img = $("#frameImg"), cv = $("#camPreview"), ctx = cv.getContext("2d");
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (!img.naturalWidth) return;
+  const W = cv.width, H = cv.height, camH = Math.round(H * cam.height), iw = img.naturalWidth, ih = img.naturalHeight;
+  const cover = (sx, sy, sw, sh, dy, dh) => {
+    const s = Math.max(W / sw, dh / sh), cw = W / s, ch = dh / s;
+    ctx.drawImage(img, sx + (sw - cw) / 2, sy + (sh - ch) / 2, cw, ch, 0, dy, W, dh);
+  };
+  const camY = cam.pos === "top" ? 0 : H - camH, gameY = cam.pos === "top" ? camH : 0;
+  cover(x * iw, y * ih, w * iw, h * ih, camY, camH);
+  cover(0, 0, iw, ih, gameY, H - camH);
+}
+$("#camLayoutBtn").addEventListener("click", () => {
+  const f = folders.find(x => x.name === current);
+  cam.folder = f;
+  const lay = f.layout;
+  Object.assign(cam, lay ? { box: [...lay.facecam], height: lay.cam_height, pos: lay.cam_position }
+                         : { box: [0.7, 0.03, 0.27, 0.27], height: 0.35, pos: "top" });
+  $("#camFor").textContent = (lay ? "" : "No cam saved for this stream yet. ") +
+    "Drag the green box over the webcam: drag a corner to resize, or drag anywhere else to draw a new box.";
+  $("#camMsg").textContent = f.streamer
+    ? `Saved as ${f.streamer}'s layout, so their next streams use it too.`
+    : "Saved for this stream (it has no streamer name to save it under).";
+  const img = $("#frameImg");
+  img.onload = drawCam;
+  img.onerror = async () => {
+    const r = await fetch(img.src).then(r => r.json()).catch(() => ({}));
+    $("#camMsg").textContent = r.error || "Couldn't load a frame from the video.";
+  };
+  img.src = "/api/frame?recipe=" + encodeURIComponent(f.recipe) + "&t=" + Date.now();
+  drawCam(); $("#camDlg").showModal();
+});
+(() => {
+  const wrap = $("#frameWrap"); let drag = null;
+  const at = e => { const r = wrap.getBoundingClientRect(); return [clamp((e.clientX - r.left) / r.width, 0, 1), clamp((e.clientY - r.top) / r.height, 0, 1)]; };
+  wrap.addEventListener("pointerdown", e => {
+    const [px, py] = at(e), handle = e.target.dataset?.h;
+    drag = { mode: handle ? "resize" : e.target.closest("#camBox") ? "move" : "draw", handle, start: [px, py], box: [...cam.box] };
+    wrap.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  wrap.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const [px, py] = at(e), [sx, sy] = drag.start, [x, y, w, h] = drag.box, MIN = 0.05;
+    if (drag.mode === "move") {
+      cam.box = [clamp(x + px - sx, 0, 1 - w), clamp(y + py - sy, 0, 1 - h), w, h];
+    } else {
+      // Fixed corner: the one opposite the handle (or the start point when drawing).
+      let fx = sx, fy = sy;
+      if (drag.mode === "resize") { fx = drag.handle.includes("w") ? x + w : x; fy = drag.handle.includes("n") ? y + h : y; }
+      const x0 = Math.min(fx, px), y0 = Math.min(fy, py);
+      cam.box = [x0, y0, Math.max(Math.abs(px - fx), MIN), Math.max(Math.abs(py - fy), MIN)];
+      cam.box[2] = Math.min(cam.box[2], 1 - x0); cam.box[3] = Math.min(cam.box[3], 1 - y0);
+    }
+    drawCam();
+  });
+  wrap.addEventListener("pointerup", () => { drag = null; });
+})();
+document.querySelectorAll("#camPos button").forEach(b => b.addEventListener("click", () => { cam.pos = b.dataset.p; drawCam(); }));
+$("#camH").addEventListener("input", e => { cam.height = e.target.value / 100; drawCam(); });
+async function saveCam(render) {
+  const f = cam.folder;
+  try {
+    await postJSON("/api/layout", { recipe: f.recipe, facecam: cam.box.map(v => +v.toFixed(4)),
+                                    cam_height: cam.height, cam_position: cam.pos });
+  } catch (e) { $("#camMsg").textContent = e.message; return; }
+  $("#camDlg").close();
+  await loadLibrary();
+  if (!render) { toast("Cam layout saved. It's used the next time clips are rendered."); return; }
+  if ($("#runBtn").disabled) { toast("Saved. A run is going; render again when it's done."); return; }
+  const onlyPreviews = f.clips.filter(c => c.matched).every(c => c.preview);
+  startRun({ ...formData(), source: "rerender", clips_json: f.recipe, facecam: true, vertical: true,
+             preview: onlyPreviews, dry_run: false });
+}
+$("#camSave").addEventListener("click", () => saveCam(false));
+$("#camSaveRender").addEventListener("click", () => saveCam(true));
 
 // ---------- Start ----------
 (async () => {
