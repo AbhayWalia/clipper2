@@ -215,10 +215,11 @@ def folder_clips(folder: Path) -> list[dict]:
             out.append({
                 "n": i, "file": mp4.relative_to(ROOT).as_posix(), "title": title,
                 "preview": sub.name == "previews", "size": mp4.stat().st_size,
+                "mtime": int(mp4.stat().st_mtime),  # changes when it's re-rendered
                 "score": c.get("score"), "hook": c.get("hook"), "category": c.get("category"),
                 "reason": c.get("reason"), "start": c.get("start"), "end": c.get("end"),
                 "srt": mp4.with_suffix(".srt").is_file(), "matched": bool(c),
-                "review": c.get("review"),
+                "review": c.get("review"), "facecam": c.get("facecam"),
                 # Trimmed after this video was made: it no longer matches the new edges.
                 "stale": bool(c.get("edited_at")) and c["edited_at"] > mp4.stat().st_mtime,
             })
@@ -276,7 +277,10 @@ def library() -> list[dict]:
                 pass
         runs = meta.get("runs") or []
         costs = [r["cost_usd"] for r in runs if r.get("cost_usd") is not None]
+        lay = meta.get("layout")
         folders.append({"name": d.relative_to(ROOT).as_posix(), "label": d.name,
+                        # streamer cam: True found, False looked and there isn't one, None not looked
+                        "cam": (bool(lay.get("facecam")) if isinstance(lay, dict) else None),
                         "live": live_state(meta),
                         "source_url": meta.get("source_url") if not meta.get("video") else None,
                         "sections": len(meta.get("segments") or []),
@@ -311,6 +315,14 @@ def update_clip(form: dict) -> dict:
                 c["review"] = form["review"]
             else:
                 c.pop("review", None)
+        if "facecam" in form:  # this clip with or without the streamer's cam
+            if form["facecam"] not in (True, False, None):
+                raise ValueError("Bad facecam value.")
+            if form["facecam"] is None:
+                c.pop("facecam", None)
+            else:
+                c["facecam"] = form["facecam"]
+            c["edited_at"] = time.time()  # its video no longer matches until it's re-rendered
         for key in ("start", "end"):
             delta = form.get(f"nudge_{key}")
             if delta is None:
@@ -325,7 +337,8 @@ def update_clip(form: dict) -> dict:
             c[key] = new
             c["edited_at"] = time.time()
         write_json(recipe, data)
-    return {"start": c["start"], "end": c["end"], "review": c.get("review")}
+    return {"start": c["start"], "end": c["end"], "review": c.get("review"),
+            "facecam": c.get("facecam")}
 
 
 def get_prompt() -> dict:

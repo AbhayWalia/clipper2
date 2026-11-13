@@ -598,12 +598,24 @@ def main(argv=None, quiet: bool = False) -> None:
 
     if not args.streamer and manifest.get("streamer"):
         args.streamer = manifest["streamer"]
+    only = {int(x) for x in args.only.split(",") if x.strip()} if args.only else None
+    # Cam on/off chosen per clip in the web UI ("facecam" in clips.json) beats the run's
+    # setting. If a clip being cut wants its cam, find the layout even if the run doesn't.
+    clip_cam = {i: d["facecam"] for i, d in enumerate(manifest.get("clips") or [], 1)
+                if isinstance(d, dict) and isinstance(d.get("facecam"), bool)}
+    forced = any(v for i, v in clip_cam.items() if only is None or i in only)
+    run_no_cam, want_auto = args.no_facecam, args.facecam == "auto"
+    if forced:
+        args.no_facecam = False
     # --facecam auto: a saved layout for the streamer wins, then one found on an earlier run
     # of this clips.json; otherwise the cam is looked for just before cutting.
-    auto_cam = args.facecam == "auto" and not args.no_facecam
+    auto_cam = (want_auto or forced) and not args.no_facecam
     if args.facecam == "auto":
         args.facecam = None
     layout = resolve_layout(args, probe, quiet=auto_cam)
+    args.no_facecam = run_no_cam
+    # Whether clips without their own choice get the cam.
+    default_cam = not run_no_cam and (want_auto or layout is not None)
     if layout is None and auto_cam and isinstance(manifest.get("layout"), dict):
         layout = layout_from_manifest(manifest["layout"])
         auto_cam = False  # already decided for this video (cam or no cam)
@@ -676,7 +688,6 @@ def main(argv=None, quiet: bool = False) -> None:
         segments = new
         print(f"  saved to {folder / 'segments'}; {recipe} can now re-render without the VOD.")
 
-    only = {int(x) for x in args.only.split(",") if x.strip()} if args.only else None
     if sections:
         spans = [(max(c.start - args.pad_before, 0.0),
                   min(c.end + args.pad_after, vlen) if vlen else c.end + args.pad_after)
@@ -713,7 +724,9 @@ def main(argv=None, quiet: bool = False) -> None:
     dest = args.out / "previews" if mode == "preview" else args.out
     dest.mkdir(parents=True, exist_ok=True)
     how = {"copy": "stream copy (no re-encode)", "preview": "480p previews",
-           "encode": encoder}[mode] + (f", {args.streamer or 'custom'} facecam layout" if layout else "")
+           "encode": encoder}[mode]
+    if layout and (default_cam or forced):
+        how += f", {args.streamer or 'custom'} facecam layout"
     print(f"\nCutting clips with {how} ({args.jobs} at a time)...")
 
     jobs = []
@@ -748,17 +761,18 @@ def main(argv=None, quiet: bool = False) -> None:
             else:
                 start = key
         base = dest / f"{i:02d}_{slugify(c.title)}"
+        clip_layout = layout if clip_cam.get(i, default_cam) else None
         if segs:
             write_clip_srt(base.with_suffix(".srt"), segs, start, end)
         ass = None
         if overlay:
             ass = base.with_suffix(".ass")
             build_ass(ass, segs, start, end, frame, style, captions=burn,
-                      caption_y=layout.seam() if layout else None,
+                      caption_y=clip_layout.seam() if clip_layout else None,
                       hook=c.hook if args.hook_overlay else None,
                       hook_seconds=args.hook_seconds)
         jobs.append((src, base.with_suffix(".mp4"), start - offset, end - offset, clip_mode,
-                     args.vertical, ass, clip_encoder, layout))
+                     args.vertical, ass, clip_encoder, clip_layout))
     from .render import run_cut_jobs
     with STATS.stage("cut"):
         saved, failed = run_cut_jobs(jobs, args.jobs)

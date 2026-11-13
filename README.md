@@ -115,6 +115,9 @@ the streamer and where (one call, under a cent). If there is, clips get the spli
 not, a plain 9:16 crop. The answer is stored in `clips.json`, so re-renders and live clips
 don't ask again, and saved as the streamer's layout in `layouts.json`, so their next streams
 don't either. `--no-facecam` (switch off) leaves the cam out even if a layout is saved.
+Each clip card in the web UI also has a **Streamer cam** button: it turns the cam on or off
+for that clip alone and re-renders it (about 10 seconds). The choice is saved in
+`clips.json` (`"facecam": true/false` on the clip) and beats the run's setting from then on.
 
 ```bash
 python clipper.py --url https://www.twitch.tv/videos/123456789 --facecam auto --burn-captions

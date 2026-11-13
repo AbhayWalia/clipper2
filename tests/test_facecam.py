@@ -103,3 +103,36 @@ def test_web_switch_turns_the_cam_on_and_off():
     on, _ = build_command({"source": "url", "url": "u", "facecam": True})
     off, _ = build_command({"source": "url", "url": "u", "facecam": False})
     assert on[on.index("--facecam") + 1] == "auto" and "--no-facecam" in off
+
+
+def test_each_clip_can_have_its_cam_on_or_off(tmp_path, monkeypatch, cutting):
+    # The web UI's per-clip button writes "facecam" into clips.json; it beats the run's setting.
+    cli, got = cutting
+    monkeypatch.setattr("clipfinder.facecam.find_facecam", lambda s, m: ((0.0, 0.07, 0.27, 0.27), ""))
+    m = recipe(tmp_path)
+    data = json.loads(m.read_text())
+    data["clips"] = [dict(data["clips"][0], title=f"clip {i}", start=20.0 + 60 * i, end=40.0 + 60 * i)
+                     for i in range(3)]
+    data["clips"][0]["facecam"] = False   # cam taken out of clip 1
+    data["clips"][2]["facecam"] = True    # ...and forced into clip 3
+    m.write_text(json.dumps(data))
+
+    cli.main(["--clips-json", str(m), "--facecam", "auto"], quiet=True)
+    assert [lay is not None for lay in got["layouts"]] == [False, True, True]
+
+    got["layouts"].clear()
+    cli.main(["--clips-json", str(m), "--no-facecam"], quiet=True)   # run says no cam...
+    assert [lay is not None for lay in got["layouts"]] == [False, False, True]  # ...clip 3 still wants it
+
+
+def test_web_saves_a_clips_cam_choice(tmp_path, monkeypatch):
+    from clipfinder import web
+    monkeypatch.setattr(web, "ROOT", tmp_path)
+    m = recipe(tmp_path)
+    assert web.update_clip({"recipe": "clips.json", "n": 1, "facecam": False})["facecam"] is False
+    clip = json.loads(m.read_text())["clips"][0]
+    assert clip["facecam"] is False and clip["edited_at"] > 0
+    web.update_clip({"recipe": "clips.json", "n": 1, "facecam": None})
+    assert "facecam" not in json.loads(m.read_text())["clips"][0]
+    with pytest.raises(ValueError):
+        web.update_clip({"recipe": "clips.json", "n": 1, "facecam": "yes"})
