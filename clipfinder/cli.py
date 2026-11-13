@@ -193,7 +193,7 @@ def sound_tags(video: Path) -> list:
     """Laughter/gunfire/explosions... from the sound model; optional, never blocks a run."""
     cache = video.with_suffix(".sounds.json")
     try:
-        from .sounds import sound_events, tag_audio
+        from .sounds import music_events, sound_events, tag_audio
         import panns_inference  # noqa: F401  (checked here so the hint below is accurate)
     except ImportError:
         print("  (sound tags skipped: pip install panns-inference)")
@@ -201,12 +201,13 @@ def sound_tags(video: Path) -> list:
     print("Labelling sounds (laughter, gunfire, explosions...)" +
           (" (cached)" if cache.exists() else "; about 1 min per hour of video") + "...")
     try:
-        events = sound_events(tag_audio(video, cache))
+        scores = tag_audio(video, cache)
+        events = sound_events(scores) + music_events(scores)
     except Exception as e:  # a bonus signal; never block clipping on it
         print(f"  sound tagging failed ({e}); continuing without it")
         return []
     if events:
-        top = Counter(e.detail for e in events).most_common(4)
+        top = Counter(e.detail for e in events if e.kind == "sound").most_common(4)
         print("  heard " + ", ".join(f"{k} x{v}" for k, v in top))
     return events
 
@@ -227,16 +228,17 @@ def build_signals(args, segs) -> Signals | None:
     if not events:
         return None
     n = Counter(e.kind for e in events)
-    print(f"  {n['audio']} audio spike(s), {n['sound']} tagged sound(s), {n['chat']} chat burst(s)")
+    print(f"  {n['audio']} audio spike(s), {n['sound']} tagged sound(s), {n['chat']} chat burst(s)"
+          + (f", {n['music']} stretch(es) of music" if n['music'] else ""))
     return Signals(events, segs)
 
 
 _BUILD = object()
 
 
-def find_clips(args, segs, vlen, signals=_BUILD):
+def find_clips(args, segs, vlen, signals=_BUILD, max_tokens: int | None = None):
     """Clips for these transcript lines. `signals` defaults to scanning args.video and
-    args.chat; live mode passes its own (or None)."""
+    args.chat; live mode passes its own (or None), and a smaller max_tokens."""
     try:
         import anthropic
     except ImportError:
@@ -263,6 +265,8 @@ def find_clips(args, segs, vlen, signals=_BUILD):
                         context=args.context, refusal_model=refusal_model,
                         server_fallback=not args.no_server_fallback,
                         cache_system=bool(examples))
+    if max_tokens:
+        cfg.max_tokens = max_tokens
     if signals is _BUILD:
         signals = build_signals(args, segs)
     if signals:
@@ -307,6 +311,9 @@ def find_clips(args, segs, vlen, signals=_BUILD):
         c.id = clip_id(args.video, c.start, fingerprint)
         c.text = fb.clip_text(c, segs)
         c.features = fb.clip_features(c, segs, signals, pad=pad)
+        if signals is not None:  # how much of the posted clip has music (radio) in it
+            from .sounds import music_share
+            c.music = music_share(signals.events, c.start - args.pad_before, c.end + args.pad_after)
     if ranker:
         print(f"Re-ranking {len(clips)} candidate(s) with {args.ranker} "
               f"(trained on {ranker['trained_on']} posted clips).")

@@ -39,6 +39,10 @@ STALL = 120.0       # no new chunk for this long (wall clock) = the stream is ov
 STALL_ADS = 420.0   # ...with streamlink, which pauses during Twitch ad breaks (up to a few minutes)
 KEEP = 900.0        # recording kept behind the newest analysed second
 POLL = 2.0
+MIN_LOOK = 60.0     # don't ask Claude about less new stream than this (not worth a call)
+# Output budget per live look. Normal looks use a few hundred tokens; this caps what a
+# runaway response can cost (one hit the default 16,000 on a 51 s stretch: $0.16, no clips).
+LOOK_MAX_TOKENS = 8000
 MAX_RESTARTS = 5
 SPIKE_SOUNDS = {"screaming", "laughter", "explosion", "cheering", "crash"}
 UI_FIELDS = ("review", "original_start", "original_end", "edited_at")  # set by the web UI
@@ -130,9 +134,13 @@ class Recorder:
                  readrate: float | None = None):
         self.source, self.folder, self.max_height, self.readrate = source, folder, max_height, readrate
         self.file_input = Path(source).exists()
-        self.streamlink = (not self.file_input and "twitch.tv" in source.lower()
+        site = source.lower()
+        self.twitch = "twitch.tv" in site
+        # streamlink for Twitch (it leaves the ads out) and Kick (yt-dlp's Kick support is
+        # thinner); yt-dlp + ffmpeg for everything else, or if streamlink isn't installed.
+        self.streamlink = (not self.file_input and (self.twitch or "kick.com" in site)
                            and has_streamlink())
-        self.stall = STALL_ADS if self.streamlink else STALL
+        self.stall = STALL_ADS if self.streamlink and self.twitch else STALL
         self.info: dict = {}
         # (run number, session time its first frame belongs at); None until the run's
         # first chunk shows up, since streamlink may hold back pre-roll ads for a while.
@@ -400,7 +408,7 @@ class LiveSession:
             from .sounds import tag_audio
             try:
                 for g, vals in tag_audio(audio, None, self.sound_model).items():
-                    place(self.sounds[g], t0, vals, 0.0)
+                    place(self.sounds.setdefault(g, []), t0, vals, 0.0)
             except Exception as e:
                 print(f"  sound tagging failed ({e})")
         audio.unlink(missing_ok=True)
@@ -411,9 +419,9 @@ class LiveSession:
 
     def events(self) -> list:
         from .signals import audio_events, chat_events
-        from .sounds import sound_events
+        from .sounds import music_events, sound_events
         ev = audio_events(self.levels, self.args.audio_threshold) if self.levels else []
-        ev += sound_events(self.sounds)
+        ev += sound_events(self.sounds) + music_events(self.sounds)
         if self.chat and self.chat.messages:
             ev += chat_events(list(self.chat.messages), offset=self.args.chat_offset)
         return ev
@@ -425,7 +433,7 @@ class LiveSession:
         return min(hits) if hits else None
 
     def should_look(self, final: bool) -> bool:
-        if self.analysed <= self.accepted:
+        if self.analysed - self.accepted < MIN_LOOK:
             return False
         if final or self.analysed - self.last_look >= EVERY:
             return True
@@ -451,7 +459,8 @@ class LiveSession:
         print(f"[{fmt_clock(t1)}] asking Claude about {fmt_clock(t0)}-{fmt_clock(t1)}"
               + (f" ({len(ev)} signal(s))" if ev else "") + "...")
         try:
-            found = find_clips(self.args, segs, None, signals=Signals(ev, segs) if ev else None)
+            found = find_clips(self.args, segs, None, signals=Signals(ev, segs) if ev else None,
+                               max_tokens=LOOK_MAX_TOKENS)
         except SystemExit as e:  # every call failed; try this stretch again next time
             print(f"  {e}")
             return []
@@ -606,7 +615,7 @@ def run_live(args) -> None:
     session = LiveSession(args, folder)
     rec = Recorder(args.live, session.chunk_dir, args.max_height, args.live_readrate)
     print(f"Clipping {args.live} live into {folder}/ (Ctrl+C to stop)")
-    if rec.streamlink:
+    if rec.streamlink and rec.twitch:
         print("  recording with streamlink, which leaves out Twitch's ads")
     elif "twitch.tv" in args.live.lower():
         print("  note: Twitch's ads will be recorded too (they show up as broken video). "
@@ -614,7 +623,9 @@ def run_live(args) -> None:
     session.load_sound_model()
     rec.start()
     session.status = "recording"
-    if not file_input and not args.no_chat:
+    if "kick.com" in args.live.lower():
+        print("  (live chat isn't available for Kick; clipping without chat bursts)")
+    elif not file_input and not args.no_chat:
         session.chat = LiveChat(args.live, rec.t0)
         session.chat.start()
     session.save()

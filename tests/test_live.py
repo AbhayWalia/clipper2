@@ -186,3 +186,17 @@ def test_recording_reconnects_only_while_the_channel_is_live(tmp_path, monkeypat
         raise SystemExit("https://www.twitch.tv/alice isn't live right now.")
     monkeypatch.setattr(rec, "start", offline)
     assert not rec.recording()
+
+
+def test_kick_also_records_through_streamlink(tmp_path, monkeypatch):
+    monkeypatch.setattr(live, "has_streamlink", lambda: True)
+    rec = live.Recorder("https://kick.com/n3on", tmp_path)
+    assert rec.streamlink and not rec.twitch and rec.stall == live.STALL  # no ad breaks to wait out
+
+
+def test_no_look_at_less_than_a_minute_of_new_stream(tmp_path):
+    s = session(tmp_path)
+    s.analysed = 51          # a 51 s session: once cost $0.16 for nothing
+    assert not s.should_look(final=True)
+    s.analysed = 75
+    assert s.should_look(final=True)

@@ -40,6 +40,14 @@ GROUPS: dict[str, list[str]] = {
     "cheering": ["Cheering", "Applause"],
 }
 
+# Music is scored too, but as a warning rather than a highlight: GTA's radio plays licensed
+# songs, and clips with them get muted on Twitch or claimed on YouTube. The model can't tell
+# the radio from the game's own score, so it flags "music", not "copyrighted music".
+# Measured: speech-only GTA stream audio reaches 0.3 in ~3% of seconds; a radio song mixed
+# under the streamer's voice at -6/-12/-18 dB in 70/50/34%.
+MUSIC_LABELS = ["Music"]
+MUSIC_LEVEL = 0.3
+
 
 def _download(url: str, dest: Path, min_bytes: int) -> None:
     if dest.exists() and dest.stat().st_size >= min_bytes:
@@ -68,7 +76,8 @@ def load_model():
         tagger.model.to("mps")
         tagger.device = "mps"
     index = {lb: i for i, lb in enumerate(labels)}
-    groups = {g: [index[lb] for lb in lbs if lb in index] for g, lbs in GROUPS.items()}
+    groups = {g: [index[lb] for lb in lbs if lb in index]
+              for g, lbs in {**GROUPS, "music": MUSIC_LABELS}.items()}
     return tagger, groups
 
 
@@ -101,7 +110,9 @@ def split_windows(samples, final: bool, sr: int = SAMPLE_RATE, window: float = W
 def tag_audio(video: Path, cache: Path | None = None, model=None) -> dict[str, list[float]]:
     """Score every second of the video for each sound group (0-1). Cached as JSON."""
     if cache and cache.exists():
-        return json.loads(cache.read_text())
+        cached = json.loads(cache.read_text())
+        if "music" in cached:
+            return cached  # (caches from before music was scored get redone)
     import numpy as np
     import torch
 
@@ -145,7 +156,7 @@ def sound_events(scores: dict[str, list[float]], threshold: float = 0.25, margin
     """Seconds where a sound group is likely and clearly above its usual level nearby."""
     events = []
     for group, vals in scores.items():
-        if not vals:
+        if not vals or group == "music":  # music is a warning, see music_events
             continue
         base = rolling_median(vals, radius)
         hits = [(float(t), v) for t, (v, b) in enumerate(zip(vals, base))
@@ -153,3 +164,21 @@ def sound_events(scores: dict[str, list[float]], threshold: float = 0.25, margin
         events += [Event(a, b, "sound", round(peak, 2), group)
                    for a, b, peak in merge_runs(hits, 1.0, 2.0)]
     return sorted(events, key=lambda e: e.start)
+
+
+def music_events(scores: dict[str, list[float]], level: float = MUSIC_LEVEL,
+                 min_len: float = 5.0) -> list[Event]:
+    """Stretches of at least `min_len` seconds with music playing (likely the radio)."""
+    vals = scores.get("music") or []
+    hits = [(float(t), v) for t, v in enumerate(vals) if v >= level]
+    return [Event(a, b, "music", round(peak, 2)) for a, b, peak in merge_runs(hits, 1.0, 3.0)
+            if b - a >= min_len]
+
+
+def music_share(events: list[Event], start: float, end: float) -> float:
+    """How much of [start, end] has music playing, 0-1."""
+    if end <= start:
+        return 0.0
+    covered = sum(max(0.0, min(e.end, end) - max(e.start, start))
+                  for e in events if e.kind == "music")
+    return round(min(covered / (end - start), 1.0), 2)

@@ -105,6 +105,14 @@ so about a minute per hour of video, cached in `VIDEO.sounds.json`).
 `pip install panns-inference` to turn it on; the ~330 MB model downloads to `~/panns_data` the
 first time. `--no-sound-tags` (or the switch in the web UI) turns it off.
 
+**Music warning.** GTA's radio plays licensed songs: Twitch mutes them in VODs and deletes
+clips with them, and YouTube/TikTok can claim the clip. The sound model also scores music, so
+Claude is told where music plays (and to prefer moments without it), each clip records how
+much of it has music (`"music": 0.6` in `clips.json`), and clips with 25% or more get a
+**♪ Music** badge in the web UI. The model can't tell the radio from the game's own score, so
+treat the badge as "check this before posting". Tested: a radio song mixed under a streamer
+talking is caught at -6 to -18 dB; speech-only stream audio isn't flagged.
+
 ## Streamer cam (facecam) layouts
 
 The Shorts look: the streamer's webcam on top, gameplay below, captions on the seam.
@@ -223,7 +231,7 @@ The web UI's **Link** tab has an **Audio first** switch, on by default.
 
 ## Live streams
 
-`--live URL` clips a Twitch (or YouTube) stream while it's on:
+`--live URL` clips a Twitch, Kick or YouTube stream while it's on:
 
 ```bash
 python clipper.py --live https://www.twitch.tv/alice --vertical --burn-captions --whisper-model turbo
@@ -258,7 +266,8 @@ Only clip streams you have permission to use.
 90 s when you join, and whenever the streamer runs ads). Recorded as-is, they come out as
 broken video (ffmpeg prints errors like `error while decoding MB`). With
 `pip install streamlink`, live mode records Twitch through streamlink, which leaves the ads
-out; the recording just pauses for them and the clock stays in line with chat. Without it,
+out; the recording just pauses for them and the clock stays in line with chat. Kick streams
+are recorded through streamlink too (when installed); live chat isn't read for Kick. Without it,
 the ads are recorded and a clip that runs into one shows broken video. The recorder's own
 messages go to `chunks/recording.log`.
 

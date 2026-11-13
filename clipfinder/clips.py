@@ -24,6 +24,7 @@ class Clip:
     text: str = ""                                 # what's said in the clip
     features: dict = field(default_factory=dict)   # measurements the re-ranker learns from
     predicted: float | None = None                 # re-ranker score, when one is in use
+    music: float = 0.0                             # share of the clip with music (radio) playing
 
     REQUIRED = ("start", "end", "score", "title", "hook", "category", "reason")
 
@@ -34,7 +35,7 @@ class Clip:
     @classmethod
     def from_dict(cls, d: dict) -> "Clip":
         kw = {k: d[k] for k in cls.REQUIRED}
-        kw.update({k: d[k] for k in ("id", "text", "features", "predicted") if k in d})
+        kw.update({k: d[k] for k in ("id", "text", "features", "predicted", "music") if k in d})
         return cls(**kw)
 
 
