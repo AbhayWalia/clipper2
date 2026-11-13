@@ -27,6 +27,7 @@ them. `README.md` covers usage, `TODO.md` what's left.
   - `stats.py`: token cost and stage timing per run
   - `storage.py`: `--upload`/`--fetch` for S3 and R2
   - `web.py` + `static/index.html`: the local web UI (`ui.py`)
+  - `results.py`: the web UI's side of the feedback library (log results, import, train)
   - `cli.py`: options and the pipeline
 - Tests are in `tests/`, one file per area.
 
