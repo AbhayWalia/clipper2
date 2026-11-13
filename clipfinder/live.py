@@ -36,10 +36,12 @@ SETTLE = 60.0       # a clip must end this long before the newest analysed secon
 CONTEXT = 120.0     # how far back each look reaches before the last one's cut-off
 MIN_GAP = 60.0      # spike-triggered looks no closer together than this
 STALL = 120.0       # no new chunk for this long (wall clock) = the stream is over
+STALL_ADS = 420.0   # ...with streamlink, which pauses during Twitch ad breaks (up to a few minutes)
 KEEP = 900.0        # recording kept behind the newest analysed second
 POLL = 2.0
 MAX_RESTARTS = 5
 SPIKE_SOUNDS = {"screaming", "laughter", "explosion", "cheering", "crash"}
+UI_FIELDS = ("review", "original_start", "original_end", "edited_at")  # set by the web UI
 
 
 @dataclass
@@ -76,12 +78,29 @@ def resolve_stream(source: str, max_height: int = 1080) -> tuple[str, dict]:
     return info["url"], info
 
 
-def record_cmd(src: str, folder: Path, run: int, file_input: bool,
+def has_streamlink() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("streamlink") is not None
+
+
+def streamlink_cmd(source: str, max_height: int = 1080) -> list[str]:
+    """streamlink writing the stream to stdout. Its Twitch plugin leaves out the ads Twitch
+    stitches into the stream for logged-out viewers (they can't be decoded as part of it)."""
+    import sys
+    quality = "best" if max_height >= 1080 else f"{max_height}p60,{max_height}p,best"
+    return [sys.executable, "-m", "streamlink", "--stdout", "--loglevel", "info", source, quality]
+
+
+def record_cmd(src: str, folder: Path, run: int, mode: str,
                readrate: float | None = None) -> list[str]:
-    if file_input:  # replay a file at stream speed (or faster), for trying live mode out
+    """ffmpeg cutting the input into chunks. mode: "file" (replay a file at stream speed, or
+    faster, for trying live mode out), "url" (an HLS URL) or "pipe" (streamlink's output)."""
+    if mode == "file":
         inp = ["-readrate", str(readrate)] if readrate else ["-re"]
-    else:
+    elif mode == "url":
         inp = ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
+    else:
+        inp, src = [], "pipe:0"
     return ["ffmpeg", "-hide_banner", "-loglevel", "error", *inp, "-i", src,
             "-map", "0:v:0?", "-map", "0:a:0", "-c", "copy",
             "-f", "segment", "-segment_time", str(CHUNK), "-segment_list_type", "csv",
@@ -104,15 +123,23 @@ def read_chunk_list(path: Path, run: int, offset: float) -> list[Chunk]:
 
 
 class Recorder:
-    """ffmpeg writing the stream into chunks; restarts it if the connection drops."""
+    """ffmpeg writing the stream into chunks (fed by streamlink for Twitch when it's
+    installed, so ads are left out); reconnects if the connection drops."""
 
     def __init__(self, source: str, folder: Path, max_height: int = 1080,
                  readrate: float | None = None):
         self.source, self.folder, self.max_height, self.readrate = source, folder, max_height, readrate
         self.file_input = Path(source).exists()
+        self.streamlink = (not self.file_input and "twitch.tv" in source.lower()
+                           and has_streamlink())
+        self.stall = STALL_ADS if self.streamlink else STALL
         self.info: dict = {}
-        self.runs: list[tuple[int, float]] = []  # (run number, session time it started at)
+        # (run number, session time its first frame belongs at); None until the run's
+        # first chunk shows up, since streamlink may hold back pre-roll ads for a while.
+        self.runs: list[list] = []
         self.proc: subprocess.Popen | None = None
+        self.feeder: subprocess.Popen | None = None
+        self.log = folder / "recording.log"  # ffmpeg/streamlink messages, read when they stop
         self.t0 = 0.0  # wall clock at session start
         self.restarts = 0
         self.stopped = False
@@ -121,48 +148,87 @@ class Recorder:
         folder = self.folder
         folder.mkdir(parents=True, exist_ok=True)
         if self.file_input:
-            src = self.source
-        else:
+            src, mode = self.source, "file"
+        else:  # yt-dlp also tells us whether it's live, and the title and channel
             src, self.info = resolve_stream(self.source, self.max_height)
+            mode = "pipe" if self.streamlink else "url"
         if not self.runs:
             self.t0 = time.time()
         run = len(self.runs)
-        self.runs.append((run, time.time() - self.t0))
-        self.proc = subprocess.Popen(record_cmd(src, folder, run, self.file_input, self.readrate),
-                                     stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        self.runs.append([run, None, time.time() - self.t0])
+        # Messages go to a file: a pipe nobody reads fills up and stalls the recording.
+        log = open(self.log, "a")
+        stdin = subprocess.DEVNULL
+        if mode == "pipe":
+            self.feeder = subprocess.Popen(streamlink_cmd(self.source, self.max_height),
+                                           stdout=subprocess.PIPE, stderr=log)
+            stdin = self.feeder.stdout
+        # stdout to DEVNULL: ffmpeg mustn't hold the web UI's log pipe open after we exit.
+        self.proc = subprocess.Popen(record_cmd(src, folder, run, mode, self.readrate),
+                                     stdin=stdin, stdout=subprocess.DEVNULL, stderr=log)
+        if self.feeder:
+            self.feeder.stdout.close()  # ffmpeg owns it now; streamlink sees it if ffmpeg dies
+        log.close()
 
     def chunks(self) -> list[Chunk]:
         out = []
-        for run, offset in self.runs:
+        for r in self.runs:
+            run, offset, launched = r
+            if offset is None:
+                got = read_chunk_list(self.folder / f"r{run}.csv", run, 0.0)
+                if not got:
+                    continue
+                # Place the run by when its first chunk turned up, not when it was launched
+                # (pre-roll ads can delay the first frame), so chat stays lined up.
+                r[1] = offset = max(launched, time.time() - self.t0 - got[0].end)
             out += read_chunk_list(self.folder / f"r{run}.csv", run, offset)
         return out
 
+    def last_message(self) -> str:
+        try:
+            lines = [l for l in self.log.read_text(errors="replace").splitlines() if l.strip()]
+        except OSError:
+            return ""
+        return lines[-1][-200:] if lines else ""
+
+    def _end_feeder(self) -> None:
+        if self.feeder and self.feeder.poll() is None:
+            self.feeder.terminate()
+            try:
+                self.feeder.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.feeder.kill()
+
     def recording(self) -> bool:
-        """True while ffmpeg runs; restarts it (a few times) if it died mid-stream."""
+        """True while recording; reconnects (a few times) if it stopped but the channel is
+        still live."""
         if self.proc is None or self.stopped:
             return False
         if self.proc.poll() is None:
             return True
-        err = (self.proc.stderr.read() if self.proc.stderr else "").strip()
-        if self.file_input or self.proc.returncode == 0:
-            return False  # the file or the stream ended
+        self._end_feeder()
+        if self.file_input:
+            return False  # the file ended
+        why = self.last_message() or "the recording stopped"
         if self.restarts >= MAX_RESTARTS:
-            print(f"  recording stopped ({err[-200:] or 'ffmpeg exited'}); giving up after "
-                  f"{MAX_RESTARTS} restarts")
+            print(f"  recording stopped ({why}); giving up after {MAX_RESTARTS} reconnects")
             return False
         self.restarts += 1
-        print(f"  recording dropped ({err[-200:] or 'ffmpeg exited'}); reconnecting...")
         try:
-            self.start()
-        except SystemExit as e:  # e.g. the stream went offline
+            self.start()  # says it isn't live (and we stop) if the stream really ended
+        except SystemExit as e:
             print(f"  {e}")
             return False
+        print(f"  recording dropped ({why}); reconnected")
         return True
 
     def stop(self) -> None:
         self.stopped = True
-        if self.proc and self.proc.poll() is None:
+        if self.feeder and self.feeder.poll() is None:
+            self._end_feeder()  # ffmpeg sees the end of its input and finishes the last chunk
+        elif self.proc and self.proc.poll() is None:
             self.proc.send_signal(signal.SIGINT)  # lets ffmpeg finish the last chunk
+        if self.proc:
             try:
                 self.proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
@@ -340,6 +406,7 @@ class LiveSession:
         audio.unlink(missing_ok=True)
         self.done.update(c.file for c in block)
         self.analysed = max(self.analysed, t1)
+        self.save()  # also the heartbeat the web UI watches
         print(f"[{fmt_clock(t1)}] transcribed {t1 - t0:.0f}s: {len(segs)} line(s)")
 
     def events(self) -> list:
@@ -457,16 +524,33 @@ class LiveSession:
                 c.file.unlink(missing_ok=True)
 
     def save(self) -> None:
-        from .clips import save_manifest
-        runs = []
+        """Write clips.json, keeping what the web UI changed in it meanwhile (Keep/Reject,
+        trims), since you can review clips while the stream is still on."""
+        from dataclasses import asdict
+        from .clips import write_json
+        disk: dict = {}
         if self.recipe.exists():
-            runs = json.loads(self.recipe.read_text(encoding="utf-8")).get("runs") or []
-        save_manifest(self.recipe, self.clips, video=None, transcript=self.transcript.resolve(),
-                      model=self.args.model, effort=self.args.effort, streamer=self.args.streamer,
-                      segments=self.segments, runs=runs,
-                      live={"source": self.args.live, "status": self.status,
-                            "analysed": round(self.analysed, 1),
-                            "updated": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            try:
+                disk = json.loads(self.recipe.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+        old = disk.get("clips") or []
+        clips = []
+        for i, c in enumerate(self.clips):
+            o = old[i] if i < len(old) else {}
+            if o.get("edited_at"):  # trimmed in the UI
+                c.start, c.end = o["start"], o["end"]
+            d = asdict(c)
+            d.update({k: o[k] for k in UI_FIELDS if k in o})
+            clips.append(d)
+        write_json(self.recipe, {
+            "video": None, "transcript": str(self.transcript.resolve()), "model": self.args.model,
+            "effort": self.args.effort, "streamer": self.args.streamer, "segments": self.segments,
+            "runs": disk.get("runs") or [],
+            "live": {"source": self.args.live, "status": self.status,
+                     "analysed": round(self.analysed, 1),
+                     "updated": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+            "clips": clips})
 
     # --- the loop -------------------------------------------------------------
     def step(self, rec: Recorder, final: bool) -> None:
@@ -478,8 +562,12 @@ class LiveSession:
             if not final:
                 break  # keep up: one block per tick, look at Claude in between
         if self.should_look(final):
-            with STATS.stage("find clips"):
-                numbers = self.look(final)
+            try:
+                with STATS.stage("find clips"):
+                    numbers = self.look(final)
+            except Exception as e:  # a hiccup mustn't end a long session; next look retries
+                print(f"  checking for clips failed ({type(e).__name__}: {e}); will try again")
+                numbers = []
             if numbers and not self.args.dry_run:
                 self.cut(numbers, rec.chunks())
         self.prune(chunks)
@@ -494,9 +582,15 @@ def session_name(source: str, info: dict) -> str:
 def run_live(args) -> None:
     from .cli import report_run
     from .fetch import streamer_slug
+    import os
     import shutil
     if not shutil.which("ffmpeg"):
         raise SystemExit("ffmpeg isn't installed or isn't on your PATH.")
+    if not os.environ.get("ANTHROPIC_API_KEY"):  # fail now, not at the first look minutes in
+        raise SystemExit("Live mode needs ANTHROPIC_API_KEY (set it, or put it in .env).")
+    # Ctrl+C (or Stop in the web UI) must reach us even if we were started with it ignored,
+    # as programs launched in the background are: it's how a session wraps up properly.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
 
     file_input = Path(args.live).exists()
     info = {} if file_input else resolve_stream(args.live, args.max_height)[1]
@@ -511,6 +605,11 @@ def run_live(args) -> None:
     session = LiveSession(args, folder)
     rec = Recorder(args.live, session.chunk_dir, args.max_height, args.live_readrate)
     print(f"Clipping {args.live} live into {folder}/ (Ctrl+C to stop)")
+    if rec.streamlink:
+        print("  recording with streamlink, which leaves out Twitch's ads")
+    elif "twitch.tv" in args.live.lower():
+        print("  note: Twitch's ads will be recorded too (they show up as broken video). "
+              "pip install streamlink to leave them out")
     session.load_sound_model()
     rec.start()
     session.status = "recording"
@@ -527,8 +626,8 @@ def run_live(args) -> None:
             n = len(rec.chunks())
             if n > seen:
                 last_new, seen = time.time(), n
-            elif alive and time.time() - last_new > STALL:
-                print(f"  no new video for {STALL:.0f}s; treating the stream as over")
+            elif alive and time.time() - last_new > rec.stall:
+                print(f"  no new video for {rec.stall:.0f}s; treating the stream as over")
                 rec.stop()
                 alive = False
             if not alive:

@@ -12,15 +12,18 @@ import json
 import mimetypes
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from .clips import write_json
 from .render import slugify
 
 ROOT = Path.cwd().resolve()
@@ -30,6 +33,8 @@ VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm"}
 CLIP_NAME = re.compile(r"^(\d+)_.*\.mp4$")
 PROMPT_FILE = ROOT / "prompt.txt"  # the clip-finding prompt, editable from the UI
 RECIPE_LOCK = threading.Lock()
+WHISPER_MODELS = {"small", "turbo", "medium", "large-v3"}
+LIVE_FRESH = 300  # a live session not heard from for this long has stopped (crashed or killed)
 
 
 def load_env() -> None:
@@ -52,13 +57,16 @@ def load_env() -> None:
 class Job:
     def __init__(self, cmd: list[str], out: str):
         self.cmd, self.out = cmd, out
+        self.live = "--live" in cmd
+        self.stopping = False
         self.lines: list[str] = []
         self.started = time.time()
         self.ended: float | None = None
         self.code: int | None = None
+        # Its own process group, so a force stop also ends what it started (ffmpeg).
         self.proc = subprocess.Popen(
             cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            bufsize=1, env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            bufsize=1, env={**os.environ, "PYTHONUNBUFFERED": "1"}, start_new_session=True)
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
@@ -72,8 +80,23 @@ class Job:
     def running(self) -> bool:
         return self.code is None
 
+    def stop(self) -> None:
+        """First press: Ctrl+C, so a run (a live session especially) wraps up properly.
+        Second press: stop it outright."""
+        if not self.running:
+            return
+        if self.stopping:
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, AttributeError):
+                self.proc.terminate()
+        else:
+            self.stopping = True
+            self.proc.send_signal(signal.SIGINT)
+
     def state(self, since: int = 0) -> dict:
         return {"running": self.running, "code": self.code, "out": self.out,
+                "live": self.live, "stopping": self.stopping,
                 "cmd": " ".join(self.cmd[1:]), "started": self.started, "ended": self.ended,
                 "lines": self.lines[since:], "total": len(self.lines)}
 
@@ -104,6 +127,16 @@ def build_command(f: dict) -> tuple[list[str], str]:
             args += ["--transcript", text("transcript")]
         else:
             args.append("--transcribe")
+    elif source == "live":
+        if not text("live_url"):
+            raise ValueError("Paste the link of a channel that's live now.")
+        args += ["--live", text("live_url")]
+        if f.get("keep_recording") is True:
+            args.append("--keep-recording")
+        if text("whisper_model"):
+            if text("whisper_model") not in WHISPER_MODELS:
+                raise ValueError("Unknown Whisper model.")
+            args += ["--whisper-model", text("whisper_model")]
     elif source == "rerender":
         if not text("clips_json"):
             raise ValueError("Pick a clips.json to re-render.")
@@ -133,7 +166,7 @@ def build_command(f: dict) -> tuple[list[str], str]:
     for key, flag in (("vertical", "--vertical"), ("burn_captions", "--burn-captions"),
                       ("hook_overlay", "--hook-overlay"), ("preview", "--preview"),
                       ("dry_run", "--dry-run"), ("batch", "--batch")):
-        if f.get(key) is True:
+        if f.get(key) is True and not (source == "live" and key == "batch"):
             args.append(flag)
     if f.get("sound_tags") is False:
         args.append("--no-sound-tags")
@@ -198,23 +231,52 @@ def uncut(folder: Path) -> int:
                for i, c in enumerate(info, 1))
 
 
-def library() -> list[dict]:
-    folders = []
+def run_folders() -> list[Path]:
+    """Folders in the project with clips in them, plus run folders one level down
+    (live sessions are saved as OUT/live_<channel>_<date>/)."""
+    out = []
     for d in sorted(ROOT.iterdir()):
         if not d.is_dir() or d.name.startswith("."):
             continue
+        out.append(d)
+        out += [s for s in sorted(d.iterdir())
+                if s.is_dir() and not s.name.startswith(".") and (s / "clips.json").is_file()]
+    return out
+
+
+def live_state(meta: dict) -> dict | None:
+    live = meta.get("live")
+    if not isinstance(live, dict):
+        return None
+    try:
+        age = time.time() - datetime.fromisoformat(live["updated"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        age = float("inf")
+    active = live.get("status") in ("starting", "recording", "finishing") and age < LIVE_FRESH
+    return {"source": live.get("source"), "status": live.get("status"), "active": active,
+            "analysed": live.get("analysed"), "age": round(age) if age != float("inf") else None}
+
+
+def library() -> list[dict]:
+    folders = []
+    for d in run_folders():
         clips = folder_clips(d)
         recipe = d / "clips.json"
         if not clips and not recipe.is_file():
             continue
-        runs = []
+        meta = {}
         if recipe.is_file():
             try:
-                runs = json.loads(recipe.read_text(encoding="utf-8")).get("runs") or []
+                meta = json.loads(recipe.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 pass
+        runs = meta.get("runs") or []
         costs = [r["cost_usd"] for r in runs if r.get("cost_usd") is not None]
-        folders.append({"name": d.name, "clips": clips, "uncut": uncut(d) if recipe.is_file() else 0,
+        folders.append({"name": d.relative_to(ROOT).as_posix(), "label": d.name,
+                        "live": live_state(meta),
+                        "source_url": meta.get("source_url") if not meta.get("video") else None,
+                        "sections": len(meta.get("segments") or []),
+                        "clips": clips, "uncut": uncut(d) if recipe.is_file() else 0,
                         "approved": sorted(c["n"] for c in clips if c["review"] == "approved"),
                         "rejected": sum(c["review"] == "rejected" for c in clips),
                         "cost": round(sum(costs), 4) if costs else None,
@@ -258,7 +320,7 @@ def update_clip(form: dict) -> dict:
                 raise ValueError("A clip must stay at least 1 second long.")
             c[key] = new
             c["edited_at"] = time.time()
-        recipe.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        write_json(recipe, data)
     return {"start": c["start"], "end": c["end"], "review": c.get("review")}
 
 
@@ -357,9 +419,9 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, KeyError) as e:
                 return self.send_json({"error": str(e) or "Bad request"}, HTTPStatus.BAD_REQUEST)
         if self.path == "/api/stop":
-            if JOB and JOB.running:
-                JOB.proc.terminate()
-            return self.send_json({"ok": True})
+            if JOB:
+                JOB.stop()
+            return self.send_json(JOB.state(len(JOB.lines)) if JOB else {"ok": True})
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def send_file(self, path: Path, download: bool = False) -> None:
