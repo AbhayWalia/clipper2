@@ -182,6 +182,8 @@ def describe(e: Event, segs: list[Segment]) -> str:
     if e.kind == "sound":
         quiet = "" if has_speech(segs, e.start, e.end) else " (no speech)"
         return f"{rng} sounds like {e.detail} ({e.strength:.0%} likely){quiet}"
+    if e.kind == "music":
+        return f"{rng} music playing (likely the in-game radio)"
     detail = f": {e.detail}" if e.detail else ""
     return f"{rng} chat burst, {e.strength:.1f}x normal rate{detail}"
 
@@ -218,7 +220,9 @@ class Signals:
 SIGNALS_HEADER = """Other signals for this section. The transcript only has speech, so these catch \
 moments it misses: an audio spike is a sudden loud moment in the game or the room, \
 "sounds like" is what a sound model heard (laughter, screaming, gunfire, explosions, sirens, \
-crashes, tyre squeals), a chat burst is viewers reacting. Sound labels are probabilities \
+crashes, tyre squeals), a chat burst is viewers reacting, "music playing" is usually the in-game \
+radio: its songs are copyrighted, and clips with them get muted or claimed, so when moments are \
+otherwise similar prefer the one without music, and don't run a clip into music it doesn't need. Sound labels are probabilities \
 from game audio mixed with voice, so treat them as hints. A strong spike or burst with little speech can still be a great \
 clip; start it a few seconds before the signal so the build-up is included. Chat reacts \
 5-15 seconds after the moment."""

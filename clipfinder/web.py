@@ -219,7 +219,7 @@ def folder_clips(folder: Path) -> list[dict]:
                 "score": c.get("score"), "hook": c.get("hook"), "category": c.get("category"),
                 "reason": c.get("reason"), "start": c.get("start"), "end": c.get("end"),
                 "srt": mp4.with_suffix(".srt").is_file(), "matched": bool(c),
-                "review": c.get("review"), "facecam": c.get("facecam"),
+                "review": c.get("review"), "facecam": c.get("facecam"), "music": c.get("music") or 0,
                 # Trimmed after this video was made: it no longer matches the new edges.
                 "stale": bool(c.get("edited_at")) and c["edited_at"] > mp4.stat().st_mtime,
             })

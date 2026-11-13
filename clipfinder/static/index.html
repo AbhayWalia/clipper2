@@ -738,6 +738,7 @@ function clipCard(c, folder) {
       ${c.hook ? `<p class="hook">“${esc(c.hook.replace(/^["“'\s]+|["”'\s]+$/g, ""))}”</p>` : ""}
       <div class="meta">
         ${c.category ? `<span class="badge cat">${esc(c.category)}</span>` : ""}
+        ${c.music >= 0.25 ? `<span class="badge warn" title="Music plays through ${Math.round(c.music * 100)}% of this clip. If it's the in-game radio, the song is copyrighted: Twitch mutes it and YouTube/TikTok may claim the clip. Trim it out or swap the audio before posting.">♪ Music ${Math.round(c.music * 100)}%</span>` : ""}
         ${c.start != null ? `<span>${fmtTime(c.start)} → ${fmtTime(c.end)}</span><span>·</span><span class="len">${Math.round(len)}s</span>` : `<span class="len"></span>`}
         <span>${fmtSize(c.size)}</span>
       </div>

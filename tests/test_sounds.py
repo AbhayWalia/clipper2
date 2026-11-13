@@ -1,5 +1,6 @@
 """Sound tags: windowing, event detection, prompt notes and ranker features."""
 
+import json
 import shutil
 import subprocess
 import types
@@ -64,8 +65,32 @@ def test_tag_audio_streams_and_caches(tmp_path):
             probs = np.zeros((len(batch), 3))
             probs[:, 1] = np.abs(batch).max(axis=1)
             return probs, None
-    model = (FakeTagger(), {"explosion": [1], "laughter": [0]})
+    model = (FakeTagger(), {"explosion": [1], "laughter": [0], "music": [2]})
     cache = tmp_path / "a.sounds.json"
     scores = sounds.tag_audio(wav, cache, model=model)
     assert len(scores["explosion"]) == 6 and scores["laughter"] == [0.0] * 6
     assert cache.exists() and sounds.tag_audio(wav, cache, model=None) == scores  # cached
+
+
+def test_music_is_a_warning_not_a_highlight():
+    scores = {"music": [0.0] * 10 + [0.6] * 20 + [0.1] * 10 + [0.5] * 3, "gunfire": [0.0] * 43}
+    assert sounds.sound_events(scores) == []                 # never becomes a "sounds like" event
+    ev = sounds.music_events(scores)
+    assert [(e.start, e.end, e.kind) for e in ev] == [(10.0, 30.0, "music")]  # 3 s blip ignored
+    assert sounds.music_share(ev, 0, 40) == 0.5
+    assert sounds.music_share(ev, 30, 40) == 0.0
+
+
+def test_old_caches_without_music_are_redone(tmp_path):
+    cache = tmp_path / "a.sounds.json"
+    cache.write_text('{"gunfire": [0.1]}')
+    calls = []
+
+    class FakeTagger:
+        def inference(self, batch):
+            calls.append(1)
+            return np.zeros((len(batch), 2)), None
+    wav = tmp_path / "a.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=duration=2", str(wav)], check=True)
+    got = sounds.tag_audio(wav, cache, model=(FakeTagger(), {"gunfire": [0], "music": [1]}))
+    assert calls and "music" in got and "music" in json.loads(cache.read_text())
