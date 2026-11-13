@@ -19,6 +19,7 @@ Use it from the command line (`python clipper.py`) or the web UI (`python ui.py`
    - `mlx-whisper` (Apple Silicon) or `faster-whisper`: transcribe videos with no captions
    - `yt-dlp chat-downloader`: `--url` downloads
    - `panns-inference`: sound detection (see below)
+   - `streamlink`: leaves Twitch ads out of `--live` recordings
 3. Get an API key from https://console.anthropic.com and set it:
    - Mac/Linux: `export ANTHROPIC_API_KEY=sk-ant-...`
    - Windows (PowerShell): `$env:ANTHROPIC_API_KEY="sk-ant-..."`
@@ -231,8 +232,15 @@ stream is still on and re-render them with different settings later.
 $1-2 for a 6-hour stream (`--triage-model claude-haiku-5-5` for less). The whole video is
 recorded as it airs (about 3 GB/hour at 1080p60; `--max-height 720` roughly halves it), and
 the clipper must run for the whole stream. It can't clip what aired before it started.
-Twitch may insert ads into the stream for viewers who aren't logged in; they get recorded
-too. Only clip streams you have permission to use.
+Only clip streams you have permission to use.
+
+**Twitch ads:** Twitch inserts ads into the stream for viewers who aren't logged in (about
+90 s when you join, and whenever the streamer runs ads). Recorded as-is, they come out as
+broken video (ffmpeg prints errors like `error while decoding MB`). With
+`pip install streamlink`, live mode records Twitch through streamlink, which leaves the ads
+out; the recording just pauses for them and the clock stays in line with chat. Without it,
+the ads are recorded and a clip that runs into one shows broken video. The recorder's own
+messages go to `chunks/recording.log`.
 
 ## Transcript formats
 

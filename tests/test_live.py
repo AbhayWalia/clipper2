@@ -1,6 +1,7 @@
 """--live: the pieces that decide what to transcribe, when to ask Claude and what's new."""
 
 from pathlib import Path
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -143,3 +144,45 @@ def test_saving_keeps_review_and_trims_made_in_the_web_ui(tmp_path):
     assert [c.get("review") for c in got] == ["approved", "rejected", None]
     assert got[1]["start"] == 101.0 and got[1]["original_start"] == 100.0
     assert s.clips[1].start == 101.0                               # later cuts use the trim
+
+
+def test_twitch_goes_through_streamlink_when_installed(tmp_path, monkeypatch):
+    monkeypatch.setattr(live, "has_streamlink", lambda: True)
+    rec = live.Recorder("https://www.twitch.tv/alice", tmp_path)
+    assert rec.streamlink and rec.stall == live.STALL_ADS
+    assert not live.Recorder("https://www.youtube.com/watch?v=x", tmp_path).streamlink
+    monkeypatch.setattr(live, "has_streamlink", lambda: False)
+    assert live.Recorder("https://www.twitch.tv/alice", tmp_path).stall == live.STALL
+    cmd = live.record_cmd("ignored", tmp_path, 0, "pipe")
+    assert cmd[cmd.index("-i") + 1] == "pipe:0" and "-reconnect" not in cmd
+    assert live.streamlink_cmd("u", 720)[-1] == "720p60,720p,best"
+    assert live.streamlink_cmd("u", 1080)[-1] == "best"
+
+
+def test_a_run_is_placed_by_when_its_first_video_arrived(tmp_path, monkeypatch):
+    # streamlink holds back pre-roll ads, so the first frame can come a minute after launch;
+    # placing the run by its launch time would put chat a minute out of line.
+    rec = live.Recorder("https://www.twitch.tv/alice", tmp_path)
+    rec.t0, rec.runs = 1000.0, [[0, None, 0.0]]
+    monkeypatch.setattr(live.time, "time", lambda: 1075.0)
+    assert rec.chunks() == []                       # nothing recorded yet
+    (tmp_path / "r0.csv").write_text("r0_000000.ts,0.0,10.0\n")
+    got = rec.chunks()
+    assert (got[0].start, got[0].end) == (65.0, 75.0)
+    monkeypatch.setattr(live.time, "time", lambda: 2000.0)
+    assert rec.chunks()[0].start == 65.0            # fixed once known
+
+
+def test_recording_reconnects_only_while_the_channel_is_live(tmp_path, monkeypatch, capsys):
+    rec = live.Recorder("https://www.twitch.tv/alice", tmp_path)
+    rec.proc = types.SimpleNamespace(poll=lambda: 0)
+    (tmp_path / "recording.log").write_text("[cli][info] Stream ended\n")
+    starts = []
+    monkeypatch.setattr(rec, "start", lambda: starts.append(1))
+    assert rec.recording() and starts == [1]
+    assert "Stream ended" in capsys.readouterr().out
+
+    def offline():
+        raise SystemExit("https://www.twitch.tv/alice isn't live right now.")
+    monkeypatch.setattr(rec, "start", offline)
+    assert not rec.recording()
