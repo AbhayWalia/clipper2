@@ -18,6 +18,7 @@ them. `README.md` covers usage, `TODO.md` what's left.
   - `render.py`: the ffmpeg commands
   - `captions.py`: the ASS captions and hook overlay
   - `layout.py`: per-streamer facecam layouts
+  - `facecam.py`: `--facecam auto`, finding the streamer's cam with Claude
   - `signals.py`: audio and chat signals
   - `feedback.py` / `feedback_cli.py`: the library of posted clips, prompt examples and the re-ranker
   - `fetch.py`: `--url` downloads

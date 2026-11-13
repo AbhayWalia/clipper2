@@ -311,7 +311,7 @@ def chunks_for(chunks: list[Chunk], start: float, end: float) -> list[Chunk]:
     return [c for c in inside if c.run == run]
 
 
-RENDER_FLAGS = ["vertical", "burn_captions", "hook_overlay", "preview", "reencode"]
+RENDER_FLAGS = ["vertical", "burn_captions", "hook_overlay", "preview", "reencode", "no_facecam"]
 RENDER_VALUES = ["streamer", "layouts", "facecam", "gameplay", "cam_height", "cam_position",
                  "caption_style", "caption_font", "caption_color", "highlight_color",
                  "caption_case", "hook_seconds", "pad_before", "pad_after", "min_len",
@@ -547,6 +547,7 @@ class LiveSession:
             "video": None, "transcript": str(self.transcript.resolve()), "model": self.args.model,
             "effort": self.args.effort, "streamer": self.args.streamer, "segments": self.segments,
             "runs": disk.get("runs") or [],
+            **({"layout": disk["layout"]} if "layout" in disk else {}),  # found by the renderer
             "live": {"source": self.args.live, "status": self.status,
                      "analysed": round(self.analysed, 1),
                      "updated": datetime.now(timezone.utc).isoformat(timespec="seconds")},

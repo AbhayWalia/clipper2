@@ -170,6 +170,10 @@ def build_command(f: dict) -> tuple[list[str], str]:
             args.append(flag)
     if f.get("sound_tags") is False:
         args.append("--no-sound-tags")
+    if f.get("facecam") is True:
+        args += ["--facecam", "auto"]
+    elif f.get("facecam") is False:
+        args.append("--no-facecam")
     return [sys.executable, str(CLIPPER), *args], out
 
 
