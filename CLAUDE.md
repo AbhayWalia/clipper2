@@ -25,7 +25,8 @@ them. `README.md` covers usage, `TODO.md` what's left.
   - `live.py`: `--live`, clipping a stream while it's on
   - `sounds.py`: optional PANNs sound tagging (laughter, gunfire, sirens...)
   - `stats.py`: token cost and stage timing per run
-  - `storage.py`: `--upload`/`--fetch` for S3 and R2
+  - `storage.py`: `--upload`/`--fetch` for S3 and R2, per-user folders
+  - `db.py`: recording runs and clips in Supabase (tables in `supabase/migrations/`)
   - `web.py` + `static/index.html`: the local web UI (`ui.py`)
   - `results.py`: the web UI's side of the feedback library (log results, import, train)
   - `cli.py`: options and the pipeline

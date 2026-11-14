@@ -66,6 +66,11 @@ Ordered by priority within each section.
       `storage/lifecycle.json` (VODs 1 day, clips and segments 30 days, recipes kept).
 - [ ] Apply `storage/lifecycle.json` to the real bucket and test `--upload` against it.
 - [ ] Download links from the app (signed links last at most 7 days; make one per download).
+- [x] Per-user folders in the bucket (`--user`) and Supabase tables for users, runs, clips and
+      credits (`supabase/migrations/`); `--upload --user` records each run.
+- [ ] Run the migration on the real Supabase project and test `--upload --user` against it.
+- [ ] Hosted app: Supabase Auth sign-in, spend credits (`spend_credits`) before a render,
+      Stripe purchases into `credit_ledger`, and download links only for the user's own runs.
 - [ ] Per-run cost logging (token usage from each response, Whisper minutes, render time) so
       the cost per clip is measured, not estimated.
 - [ ] Bundle a caption font: Arial isn't on most Linux servers.

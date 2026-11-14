@@ -331,8 +331,9 @@ In the output folder:
 | `--save-segments` / `--segment-pad` | off / 30 (10 with --audio-first) | Keep the footage around each clip in `segments/` so the VOD can be deleted |
 | `--from-segments` | off | Re-render from saved segments even if the VOD still exists (automatic when it's gone) |
 | `--upload` / `--upload-vod` | off | Upload the run to S3 or R2 (`clips/`, `recipes/`; `vods/` too). See *Running it as a service* |
-| `--fetch STREAM` | none | Download a stream's run from the bucket into `clips/STREAM/` to re-render it |
-| `--stream` / `--links` | file name / off | Name in the bucket; print 7-day download links after `--upload` |
+| `--fetch RUN` | none | Download a run from the bucket into `clips/RUN/` to re-render it (add `--user` for a user's run) |
+| `--stream` / `--links` | file name + suffix / off | Run name in the bucket; print 7-day download links after `--upload` |
+| `--user USER_ID` | `CLIPPER_USER` | Upload into that user's folder and record the run in Supabase |
 | `--facecam auto` / `--no-facecam` | off | Find the streamer's cam and put it above the gameplay / never add it |
 | `--streamer` / `--layouts` | none / layouts.json | Use a saved facecam layout (see above) |
 | `--burn-captions` | off | Word-by-word captions; the spoken word lights up |
@@ -430,9 +431,12 @@ re-editable for 30 days while storing about a tenth of the VOD:
 
    | Prefix | What goes there | Deleted after |
    |---|---|---|
-   | `vods/<stream>.mp4` | source video (only with `--upload-vod`) | 1 day |
-   | `clips/<stream>/` | this run's clips, `.srt`, `previews/`, `segments/`, `clips.json` | 30 days |
-   | `recipes/<stream>/` | a copy of `clips.json` and the transcript (about 50 KB) | never |
+   | `vods/<user>/<run>.mp4` | source video (only with `--upload-vod`) | 1 day |
+   | `clips/<user>/<run>/` | this run's clips, `.srt`, `previews/`, `segments/`, `clips.json` | 30 days |
+   | `recipes/<user>/<run>/` | a copy of `clips.json` and the transcript (about 50 KB) | never |
+
+   `<user>/` is there only with `--user` (see *Users and Supabase* below). Each user's files sit
+   in their own folder, and the retention prefix stays first so one lifecycle rule covers everyone.
 
 ### Setting up R2 (or S3)
 
@@ -466,12 +470,14 @@ python clipper.py --video vods/alice_0412.mp4 --transcribe --save-segments --pre
   --upload --upload-vod --links
 
 # Within 30 days, from any machine: download the run and render the keepers from its segments
-python clipper.py --fetch alice_0412                 # -> clips/alice_0412/
-python clipper.py --clips-json clips/alice_0412/clips.json --streamer alice --burn-captions --upload
+# (the upload prints the run's name, e.g. alice_0412-4f9a2c)
+python clipper.py --fetch alice_0412-4f9a2c          # -> clips/alice_0412-4f9a2c/
+python clipper.py --clips-json clips/alice_0412-4f9a2c/clips.json --streamer alice --burn-captions --upload
 ```
 
-The stream's name in the bucket is the video's file name (letters, digits, `-` and `_`), or
-`--stream NAME`; it's saved in `clips.json`, so re-uploads go to the same place. Only the files
+A run's name in the bucket is the video's file name (letters, digits, `-` and `_`) plus a random
+suffix, so two uploads of `stream.mp4` never overwrite each other; `--stream NAME` picks one
+yourself. It's saved in `clips.json`, so re-uploads go to the same place. Only the files
 a run made are uploaded, so a shared `--out` folder doesn't leak other streams' clips. Segments
 already in the bucket aren't uploaded again. Download links last at most 7 days (the limit on
 both S3 and R2), so for longer access have your app make a fresh link when someone downloads.
@@ -488,6 +494,49 @@ and TikTok, Shorts and Reels give 1080p uploads better quality. Two more savings
   at full quality.
 - **Upload audio, not video,** for transcription: `--keep-audio` writes the 16 kHz FLAC track
   Whisper uses.
+
+### Users and Supabase
+
+R2 holds the files; a database says who owns them. The tables are in
+[supabase/migrations/](supabase/migrations/):
+
+| Table | What it holds |
+|---|---|
+| `profiles` | one row per signed-up user (Supabase Auth makes the user; a trigger adds the profile) |
+| `runs` | each uploaded run: owner, video, length, cost. Its `id` is its folder, `<user>/<run>` |
+| `clips` | each clip in a run: title, score, times, R2 key, size, review choice |
+| `credit_ledger` | every credit change (+6 free on sign-up, +purchases, -renders); `credit_balance` sums it |
+
+`spend_credits(user, amount, run)` checks the balance and deducts in one step, so two renders at
+the same moment can't both spend the last credit. Users can read only their own rows; only the
+server writes, with the service-role key.
+
+Set it up:
+
+1. Create a project at https://supabase.com. In the SQL editor, run the migration file (or
+   `supabase db push` with the Supabase CLI).
+2. Add to `.env` (server only; the service-role key can read and write everything):
+
+   ```
+   SUPABASE_URL=https://PROJECT.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=...
+   ```
+3. Upload under a user: `--user` takes the user's id from Supabase Auth (Authentication →
+   Users). The run and its clips are recorded after the upload:
+
+   ```bash
+   python clipper.py --video stream.mp4 --transcribe --preview --upload --user 3f1c9a2e-...
+   # uploaded 12 file(s) to clips/3f1c9a2e-.../stream-4f9a2c/ ...
+   # recorded run 3f1c9a2e-.../stream-4f9a2c and 9 clip(s) in Supabase
+   python clipper.py --fetch stream-4f9a2c --user 3f1c9a2e-...
+   ```
+
+   `CLIPPER_USER` in `.env` sets a default. Without Supabase settings the upload still works and
+   says the run wasn't recorded. A database error never undoes an upload; re-uploading records it.
+
+Folders keep users' files apart, but they don't protect them: the R2 keys can read everything.
+Users never get those keys. Your app checks that the signed-in user owns a run, then makes a
+short-lived link for its files.
 
 ## Ideas for what to add next
 
