@@ -3,6 +3,8 @@
 import json
 from types import SimpleNamespace as NS
 
+import pytest
+
 from clipfinder import llm
 from clipfinder.clips import Clip
 from clipfinder.transcript import Segment
@@ -138,3 +140,19 @@ def test_rescore_prompt_escapes_draft_titles():
     tag = re.search(r"<candidate [^>]*>", prompt).group(0)
     assert tag == ('<candidate id="0" start="10.0" end="30.0" '
                    'draft_title="He said &quot;NO WAY&quot; &lt;3 &amp; ran">')
+
+
+@pytest.mark.parametrize("raw, clean", [
+    ("anyone gets instantly.}]}</reaso", "anyone gets instantly."),   # seen in a real response
+    ('trailing"}]', "trailing"),
+    ("ends with </reason", "ends with"),
+    ('He said "no way"', 'He said "no way"'),                          # real quotes stay
+    ("Cops show up 😭", "Cops show up 😭"),
+    ("}]}", "}]}"),                                                     # never empty a field
+])
+def test_leaked_json_is_trimmed_from_clip_text(raw, clean):
+    from clipfinder.llm import clips_from, tidy_text
+    assert tidy_text(raw) == clean
+    c = clips_from({"clips": [{"start": 0, "end": 20, "score": 7, "title": "t", "hook": "h",
+                               "category": "funny", "reason": raw}]})[0]
+    assert c.reason == clean

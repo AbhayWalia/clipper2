@@ -18,14 +18,17 @@ them. `README.md` covers usage, `TODO.md` what's left.
   - `render.py`: the ffmpeg commands
   - `captions.py`: the ASS captions and hook overlay
   - `layout.py`: per-streamer facecam layouts
+  - `facecam.py`: `--facecam auto`, finding the streamer's cam with Claude
   - `signals.py`: audio and chat signals
   - `feedback.py` / `feedback_cli.py`: the library of posted clips, prompt examples and the re-ranker
   - `fetch.py`: `--url` downloads
+  - `live.py`: `--live`, clipping a stream while it's on
   - `sounds.py`: optional PANNs sound tagging (laughter, gunfire, sirens...)
   - `stats.py`: token cost and stage timing per run
   - `storage.py`: `--upload`/`--fetch` for S3 and R2, per-user folders
   - `db.py`: recording runs and clips in Supabase (tables in `supabase/migrations/`)
   - `web.py` + `static/index.html`: the local web UI (`ui.py`)
+  - `results.py`: the web UI's side of the feedback library (log results, import, train)
   - `cli.py`: options and the pipeline
 - Tests are in `tests/`, one file per area.
 

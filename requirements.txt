@@ -10,3 +10,5 @@ imageio-ffmpeg>=0.6
 # Optional, labels sounds (laughter, gunfire, explosions, sirens) as clip signals.
 # The ~330 MB model downloads to ~/panns_data on first use.
 # panns-inference
+# Optional, records Twitch for --live without the ads Twitch stitches in.
+# streamlink
