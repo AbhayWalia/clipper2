@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipper account</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Placeholder account page: same tokens as index.html */
+  :root {
+    --bg: #09090b; --card: #0f0f12; --muted: #18181b; --border: #27272a; --input: #27272a;
+    --fg: #fafafa; --fg-muted: #a1a1aa; --fg-faint: #71717a;
+    --primary: #fafafa; --primary-fg: #18181b;
+    --ok: #22c55e; --bad: #ef4444; --radius: 10px; color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #fafafa; --card: #ffffff; --muted: #f4f4f5; --border: #e4e4e7; --input: #e4e4e7;
+      --fg: #09090b; --fg-muted: #52525b; --fg-faint: #a1a1aa;
+      --primary: #18181b; --primary-fg: #fafafa; color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
+  button, input { font: inherit; color: inherit; }
+  header { height: 56px; padding: 0 24px; display: flex; align-items: center; gap: 12px;
+           border-bottom: 1px solid var(--border); }
+  header a { color: inherit; text-decoration: none; }
+  header .logo { font-weight: 600; }
+  header .spacer { flex: 1; }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 16px 64px; display: flex;
+         flex-direction: column; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .card h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .card p { margin: 0; color: var(--fg-muted); font-size: 13px; }
+  .card.danger { border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); }
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; }
+  .input { height: 36px; width: 100%; padding: 0 12px; border-radius: 8px;
+           border: 1px solid var(--input); background: transparent; outline: none; }
+  .input:focus { border-color: var(--fg-faint); }
+  .btn { height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid transparent;
+         cursor: pointer; font-weight: 500; font-size: 13px; display: inline-flex;
+         align-items: center; justify-content: center; text-decoration: none; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: var(--primary); color: var(--primary-fg); }
+  .btn-outline { background: transparent; border-color: var(--border); color: var(--fg); }
+  .btn-danger { background: var(--bad); color: #fff; }
+  .btn-sm { height: 30px; padding: 0 10px; font-size: 12px; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; gap: 3px;
+          background: var(--muted); border-radius: 8px; }
+  .tabs button { height: 30px; border: 0; border-radius: 6px; background: transparent;
+                 cursor: pointer; color: var(--fg-muted); font-weight: 500; }
+  .tabs button[aria-selected="true"] { background: var(--card); color: var(--fg); }
+  .row { display: flex; gap: 8px; align-items: end; }
+  .row label { flex: 1; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+  dt { color: var(--fg-muted); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  .link { display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+          border: 1px solid var(--border); border-radius: 8px; }
+  .link img { width: 32px; height: 32px; border-radius: 50%; background: var(--muted); }
+  .link div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .link small { color: var(--fg-faint); font-size: 12px; }
+  .provider { display: flex; flex-direction: column; gap: 8px; }
+  .provider-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .provider-h b { font-weight: 500; }
+  .msg { padding: 10px 12px; border-radius: 8px; font-size: 13px; border: 1px solid var(--border); }
+  .msg.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+  .msg.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+  .note { color: var(--fg-faint); font-size: 12px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">Clipper</a>
+  <div class="spacer"></div>
+  <a class="btn btn-outline btn-sm" href="/">Clips</a>
+  <button class="btn btn-outline btn-sm" id="logoutBtn" type="button" hidden>Sign out</button>
+</header>
+
+<main>
+  <div id="flash" class="msg" hidden></div>
+
+  <section class="card" id="notConfigured" hidden>
+    <h2>Accounts aren't set up</h2>
+    <p>Add SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY to .env, run the
+       migrations in supabase/migrations/, then restart the UI.</p>
+  </section>
+
+  <!-- Signed out -->
+  <form class="card" id="authForm" hidden>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-mode="login" aria-selected="true">Sign in</button>
+      <button type="button" role="tab" data-mode="signup" aria-selected="false">Sign up</button>
+    </div>
+    <label>Email <input class="input" name="email" type="email" autocomplete="email" required></label>
+    <label>Password <input class="input" name="password" type="password" minlength="8"
+           autocomplete="current-password" required></label>
+    <button class="btn btn-primary" type="submit" id="authSubmit">Sign in</button>
+    <p class="note" id="signupNote" hidden>New accounts get 6 free clips.</p>
+  </form>
+
+  <!-- Signed in -->
+  <section class="card" id="profileCard" hidden>
+    <h2>Profile</h2>
+    <dl>
+      <dt>Email</dt><dd id="pEmail"></dd>
+      <dt>Plan</dt><dd id="pPlan"></dd>
+      <dt>Credits</dt><dd id="pCredits"></dd>
+      <dt>Member since</dt><dd id="pSince"></dd>
+    </dl>
+    <form class="row" id="nameForm">
+      <label>Display name <input class="input" name="display_name" maxlength="50"></label>
+      <button class="btn btn-outline" type="submit">Save</button>
+    </form>
+  </section>
+
+  <section class="card" id="linksCard" hidden>
+    <h2>Linked accounts</h2>
+    <p>Link your channels so Clipper can fetch your VODs and read how your clips do.</p>
+    <div id="providers"></div>
+  </section>
+
+  <form class="card danger" id="deleteForm" hidden>
+    <h2>Delete account</h2>
+    <p>Deletes your account, your clips and recipes in storage, your credits and your linked
+       accounts. This can't be undone.</p>
+    <label>Password <input class="input" name="password" type="password"
+           autocomplete="current-password" required></label>
+    <button class="btn btn-danger" type="submit">Delete my account</button>
+  </form>
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+let mode = "login";
+
+function flash(text, ok = false) {
+  const el = $("#flash");
+  el.textContent = text;
+  el.className = "msg " + (ok ? "ok" : "bad");
+  el.hidden = !text;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function load() {
+  const res = await fetch("/api/me");
+  const me = await res.json();
+  if (!res.ok) return flash(me.error || "Couldn't load your account.");
+  const user = me.user;
+  $("#notConfigured").hidden = me.configured;
+  $("#authForm").hidden = !me.configured || !!user;
+  for (const id of ["#profileCard", "#linksCard", "#deleteForm", "#logoutBtn"]) $(id).hidden = !user;
+  if (!user) return;
+
+  $("#pEmail").textContent = user.email;
+  $("#pPlan").textContent = user.plan;
+  $("#pCredits").textContent = user.credits;
+  $("#pSince").textContent = user.created_at ? new Date(user.created_at).toLocaleDateString() : "";
+  $("#nameForm").display_name.value = user.display_name || "";
+
+  $("#providers").innerHTML = Object.entries(me.providers).map(([key, p]) => {
+    const links = user.linked.filter(l => l.provider === key);
+    return `<div class="provider">
+      <div class="provider-h"><b>${esc(p.label)}</b>
+        ${p.configured
+          ? `<a class="btn btn-outline btn-sm" href="/api/connect/${key}/start">${links.length ? "Link another" : "Link " + esc(p.label)}</a>`
+          : `<span class="note">Not set up on this server</span>`}
+      </div>
+      ${links.map(l => `<div class="link">
+        ${l.avatar_url ? `<img src="${esc(l.avatar_url)}" alt="" referrerpolicy="no-referrer">` : `<img alt="">`}
+        <div><span>${esc(l.display_name || l.handle || l.provider_user_id)}</span>
+             <small>${esc(l.handle || "")}</small></div>
+        <button class="btn btn-outline btn-sm" type="button" data-unlink="${l.id}" data-provider="${key}">Unlink</button>
+      </div>`).join("")}
+    </div>`;
+  }).join('<div style="height:12px"></div>');
+}
+
+// Email confirmation links land here with the session in the URL fragment.
+async function takeSessionFromLink() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (!h.get("access_token")) {
+    if (h.get("error_description")) flash(h.get("error_description"));
+    return;
+  }
+  history.replaceState(null, "", location.pathname + location.search);
+  try {
+    await api("/api/auth/session", {
+      access_token: h.get("access_token"), refresh_token: h.get("refresh_token"),
+      expires_in: Number(h.get("expires_in")) || undefined,
+    });
+    flash("Email confirmed. You're signed in.", true);
+  } catch (e) { flash(e.message); }
+}
+
+// Messages from the YouTube / Twitch linking round trip.
+function showLinkResult() {
+  const q = new URLSearchParams(location.search);
+  if (q.get("linked")) flash(`Linked ${q.get("linked") === "youtube" ? "YouTube" : "Twitch"}.`, true);
+  if (q.get("link_error")) flash(q.get("link_error"));
+  if (q.get("linked") || q.get("link_error")) history.replaceState(null, "", location.pathname);
+}
+
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
+  $("#authSubmit").textContent = mode === "login" ? "Sign in" : "Create account";
+  $("#signupNote").hidden = mode === "login";
+  $("#authForm").password.autocomplete = mode === "login" ? "current-password" : "new-password";
+}));
+
+$("#authForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target, btn = $("#authSubmit");
+  btn.disabled = true;
+  try {
+    const r = await api(mode === "login" ? "/api/auth/login" : "/api/auth/signup",
+                        { email: f.email.value, password: f.password.value });
+    f.password.value = "";
+    if (r.confirm_email) flash("Check your email for a link to confirm your account.", true);
+    else { flash(""); await load(); }
+  } catch (err) { flash(err.message); }
+  btn.disabled = false;
+});
+
+$("#logoutBtn").addEventListener("click", async () => {
+  await api("/api/auth/logout").catch(() => {});
+  flash("");
+  load();
+});
+
+$("#nameForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  try {
+    await api("/api/me", { display_name: e.target.display_name.value });
+    flash("Saved.", true);
+    load();
+  } catch (err) { flash(err.message); }
+});
+
+$("#providers").addEventListener("click", async e => {
+  const b = e.target.closest("[data-unlink]");
+  if (!b || !confirm("Unlink this account? Clipper loses access to it.")) return;
+  try {
+    await api(`/api/connect/${b.dataset.provider}/unlink`, { id: Number(b.dataset.unlink) });
+    flash("Unlinked.", true);
+    load();
+  } catch (err) { flash(err.message); }
+});
+
+$("#deleteForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (!confirm("Delete your account and everything in it? This can't be undone.")) return;
+  try {
+    const r = await api("/api/me/delete", { password: e.target.password.value });
+    e.target.password.value = "";
+    flash(`Account deleted (${r.files_deleted} file(s) removed).`, true);
+    load();
+  } catch (err) { flash(err.message); }
+});
+
+(async () => { await takeSessionFromLink(); showLinkResult(); load(); })();
+</script>
+</body>
+</html>

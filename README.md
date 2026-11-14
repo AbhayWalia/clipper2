@@ -534,6 +534,34 @@ Set it up:
    `CLIPPER_USER` in `.env` sets a default. Without Supabase settings the upload still works and
    says the run wasn't recorded. A database error never undoes an upload; re-uploading records it.
 
+### Accounts: sign-in and linked channels
+
+The web UI has a placeholder account page at http://localhost:8000/account: sign up, sign in,
+set a display name, link YouTube and Twitch channels, and delete the account. The server signs
+in for the browser and keeps the session in HttpOnly cookies, so no key or token reaches the page.
+
+1. Run [supabase/migrations/20261113000000_accounts.sql](supabase/migrations/) after the first
+   migration. It adds `display_name` to `profiles` and a `linked_accounts` table. Signed-in
+   users can read their links but never the OAuth tokens.
+2. Add the publishable key: `SUPABASE_ANON_KEY=...` (Project Settings → API).
+3. In Supabase, under Authentication → URL Configuration, add `http://localhost:8000/account` as a
+   redirect URL so email confirmation links come back to the account page.
+4. To link channels, create OAuth apps and add their keys. Register the redirect URL
+   `<CLIPPER_PUBLIC_URL>/api/connect/youtube/callback` (or `/twitch/callback`) with each:
+
+   ```
+   GOOGLE_CLIENT_ID=...        # Google Cloud console: OAuth client, "Web application",
+   GOOGLE_CLIENT_SECRET=...    # with the YouTube Data API v3 and YouTube Analytics API enabled
+   TWITCH_CLIENT_ID=...        # dev.twitch.tv/console/apps
+   TWITCH_CLIENT_SECRET=...
+   CLIPPER_PUBLIC_URL=http://localhost:8000   # where the app is served (https in production)
+   CLIPPER_SECRET=...          # any long random string; signs the linking requests
+   ```
+
+Deleting an account deletes the user's `clips/`, `recipes/` and `vods/` folders in the bucket
+first, then the Supabase user, which removes their profile, runs, clips, credits and links. If
+the files can't be deleted, the account is kept so nothing is left without an owner.
+
 Folders keep users' files apart, but they don't protect them: the R2 keys can read everything.
 Users never get those keys. Your app checks that the signed-in user owns a run, then makes a
 short-lived link for its files.

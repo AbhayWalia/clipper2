@@ -12,6 +12,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -19,12 +20,16 @@ import threading
 import time
 from datetime import datetime
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import results
+from . import accounts, results
+from .accounts import AccountError
+from .auth import Auth, AuthError, Session
 from .clips import write_json
+from .db import Database, DatabaseError
 from .layout import Layout, load_layouts, save_layout
 from .render import slugify
 
@@ -39,6 +44,14 @@ WHISPER_MODELS = {"small", "turbo", "medium", "large-v3"}
 CLAUDE_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"}  # what the form offers
 LIVE_FRESH = 300  # a live session not heard from for this long has stopped (crashed or killed)
 
+# Accounts (Supabase Auth). Set up by configure_accounts(); None means not configured.
+AUTH: Auth | None = None
+DB: Database | None = None
+PUBLIC_URL = "http://localhost:8000"  # CLIPPER_PUBLIC_URL: where OAuth providers send users back
+SECRET = secrets.token_bytes(32)      # CLIPPER_SECRET: signs OAuth state
+ACCESS_COOKIE, REFRESH_COOKIE = "clipper_at", "clipper_rt"
+REFRESH_MAX_AGE = 30 * 86400
+
 
 def load_env() -> None:
     """Read ANTHROPIC_API_KEY etc. from ./.env or ../.env if they aren't set already."""
@@ -51,6 +64,20 @@ def load_env() -> None:
                 continue
             key, val = line.removeprefix("export ").split("=", 1)
             os.environ.setdefault(key.strip(), val.strip().strip("'\""))
+
+
+def configure_accounts(port: int) -> None:
+    """Read the Supabase and OAuth settings (call after load_env)."""
+    global AUTH, DB, PUBLIC_URL, SECRET
+    AUTH, DB = Auth.from_env(), Database.from_env()
+    PUBLIC_URL = (os.environ.get("CLIPPER_PUBLIC_URL") or f"http://localhost:{port}").rstrip("/")
+    if os.environ.get("CLIPPER_SECRET"):
+        SECRET = os.environ["CLIPPER_SECRET"].encode()
+    # Without CLIPPER_SECRET a random one is used, so a link started before a restart fails.
+
+
+def redirect_uri(provider: str) -> str:
+    return f"{PUBLIC_URL}/api/connect/{provider}/callback"
 
 
 # --------------------------------------------------------------------------- #
@@ -473,13 +500,190 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_cookies()
         self.end_headers()
         self.wfile.write(body)
+
+    def redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_cookies()
+        self.end_headers()
+
+    # -- session cookies ---------------------------------------------------------
+
+    def cookie(self, name: str) -> str | None:
+        try:
+            jar = SimpleCookie(self.headers.get("Cookie") or "")
+        except CookieError:
+            return None
+        return jar[name].value if name in jar else None
+
+    def queue_cookie(self, name: str, value: str, max_age: int) -> None:
+        # HttpOnly: page scripts can't read the tokens. SameSite=Lax: other sites can't send
+        # them with a POST. Secure once the app is served over https.
+        secure = "; Secure" if PUBLIC_URL.startswith("https://") else ""
+        cookies = self.__dict__.setdefault("_cookies", [])
+        cookies.append(f"{name}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}")
+
+    def send_cookies(self) -> None:
+        for c in self.__dict__.pop("_cookies", []):
+            self.send_header("Set-Cookie", c)
+
+    def set_session(self, session: Session) -> None:
+        self.queue_cookie(ACCESS_COOKIE, session.access_token, session.expires_in)
+        self.queue_cookie(REFRESH_COOKIE, session.refresh_token, REFRESH_MAX_AGE)
+
+    def clear_session(self) -> None:
+        self.queue_cookie(ACCESS_COOKIE, "", 0)
+        self.queue_cookie(REFRESH_COOKIE, "", 0)
+
+    def current_user(self):
+        """The signed-in user, refreshing an expired session. None when signed out. Raises
+        AuthError (5xx) when Supabase can't be reached, rather than signing the user out."""
+        if not AUTH:
+            return None
+        access, refresh = self.cookie(ACCESS_COOKIE), self.cookie(REFRESH_COOKIE)
+        if access:
+            try:
+                return AUTH.user(access)
+            except AuthError as e:
+                if e.status >= 500:
+                    raise
+        if refresh:
+            try:
+                session = AUTH.refresh(refresh)
+                self.set_session(session)
+                return session.user
+            except AuthError as e:
+                if e.status >= 500:
+                    raise
+        if access or refresh:
+            self.clear_session()
+        return None
+
+    # -- accounts ----------------------------------------------------------------
+
+    def get_me(self) -> None:
+        providers = {k: {"label": p.label, "configured": p.configured}
+                     for k, p in accounts.PROVIDERS.items()}
+        if not AUTH or not DB:
+            return self.send_json({"configured": False, "user": None, "providers": providers})
+        try:
+            user = self.current_user()
+            me = accounts.profile(DB, user) if user else None
+        except AuthError as e:
+            return self.send_json({"error": str(e)}, e.status)
+        except DatabaseError as e:
+            print(f"accounts: {e}", file=sys.stderr)
+            return self.send_json({"error": "Couldn't load your account. Try again in a minute."},
+                                  HTTPStatus.BAD_GATEWAY)
+        return self.send_json({"configured": True, "user": me, "providers": providers})
+
+    def connect(self, provider: str, step: str, query: dict) -> None:
+        """GET /api/connect/<provider>/start sends the user to YouTube or Twitch to approve;
+        /callback is where they come back. Both end on the account page with a message."""
+        def back(**msg) -> None:
+            self.redirect("/account?" + "&".join(f"{k}={quote(str(v))}" for k, v in msg.items()))
+
+        try:
+            p = accounts.get_provider(provider)
+            if not AUTH or not DB:
+                raise AccountError("Accounts aren't set up on this server.", 503)
+            user = self.current_user()
+            if not user:
+                return back(link_error="Sign in first, then link your account.")
+            if step == "start":
+                state = accounts.sign_state(SECRET, user.id, p.key)
+                return self.redirect(accounts.authorize_url(p, state, redirect_uri(p.key)))
+            if query.get("error"):  # the user pressed Cancel on the consent screen
+                return back(link_error=f"{p.label} wasn't linked.")
+            accounts.finish_link(DB, p, user, (query.get("code") or [""])[0],
+                                 (query.get("state") or [""])[0], redirect_uri(p.key), SECRET)
+            return back(linked=p.key)
+        except (AccountError, AuthError) as e:
+            return back(link_error=str(e))
+        except DatabaseError as e:
+            print(f"accounts: {e}", file=sys.stderr)
+            return back(link_error="Couldn't save the link. Try again in a minute.")
+
+    def account_post(self, form: dict) -> None:
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":  # plain HTML forms from other sites can't send JSON
+            return self.send_json({"error": "Send JSON."}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+        if not AUTH or not DB:
+            return self.send_json({"error": "Accounts aren't set up: add SUPABASE_URL, "
+                                   "SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY to .env."},
+                                  HTTPStatus.SERVICE_UNAVAILABLE)
+        path = self.path
+        try:
+            if path == "/api/auth/signup":
+                session = AUTH.sign_up(form.get("email"), form.get("password"), PUBLIC_URL + "/account")
+                if not session:
+                    return self.send_json({"confirm_email": True})
+                self.set_session(session)
+                return self.send_json({"ok": True})
+            if path == "/api/auth/login":
+                self.set_session(AUTH.sign_in(form.get("email"), form.get("password")))
+                return self.send_json({"ok": True})
+            if path == "/api/auth/session":
+                # From the email confirmation link: Supabase puts the tokens in the URL
+                # fragment, and the account page hands them over to become cookies.
+                access, refresh = form.get("access_token"), form.get("refresh_token")
+                if not (isinstance(access, str) and isinstance(refresh, str) and access and refresh):
+                    raise AuthError("That sign-in link is incomplete. Sign in with your password.")
+                expires = form.get("expires_in")
+                self.set_session(Session(access, refresh,
+                                         expires if isinstance(expires, int) and expires > 0 else 3600,
+                                         AUTH.user(access)))
+                return self.send_json({"ok": True})
+            if path == "/api/auth/logout":
+                if self.cookie(ACCESS_COOKIE):
+                    AUTH.sign_out(self.cookie(ACCESS_COOKIE))
+                self.clear_session()
+                return self.send_json({"ok": True})
+
+            user = self.current_user()
+            if not user:
+                return self.send_json({"error": "Sign in first."}, HTTPStatus.UNAUTHORIZED)
+            if path == "/api/me":
+                return self.send_json(accounts.update_profile(DB, user, form))
+            if path == "/api/me/delete":
+                try:  # deleting everything needs the password, not just a session cookie
+                    AUTH.sign_in(user.email, form.get("password") or "")
+                except AuthError as e:
+                    if e.status >= 500:
+                        raise
+                    raise AuthError("Wrong password.", 403) from None
+                result = accounts.delete_account(DB, AUTH, user)
+                self.clear_session()
+                return self.send_json(result)
+            m = re.fullmatch(r"/api/connect/(\w+)/unlink", path)
+            if m:
+                accounts.get_provider(m.group(1))
+                return self.send_json(accounts.unlink(DB, user, form.get("id")))
+        except (AuthError, AccountError) as e:
+            return self.send_json({"error": str(e)}, e.status)
+        except DatabaseError as e:
+            print(f"accounts: {e}", file=sys.stderr)
+            return self.send_json({"error": "The database didn't answer. Try again in a minute."},
+                                  HTTPStatus.BAD_GATEWAY)
+        return self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
     def do_GET(self):
         url = urlparse(self.path)
         if url.path in ("/", "/index.html"):
             return self.send_file(STATIC / "index.html")
+        if url.path in ("/account", "/account.html"):
+            return self.send_file(STATIC / "account.html")
+        if url.path == "/api/me":
+            return self.get_me()
+        m = re.fullmatch(r"/api/connect/(\w+)/(start|callback)", url.path)
+        if m:
+            return self.connect(m.group(1), m.group(2), parse_qs(url.query))
         if url.path == "/api/library":
             return self.send_json(library())
         if url.path == "/api/inputs":
@@ -489,7 +693,6 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/results":
             return self.send_json(results.summary(ROOT))
         if url.path == "/api/frame":
-            from urllib.parse import parse_qs
             try:
                 data = frame_for(recipe_path((parse_qs(url.query).get("recipe") or [""])[0]))
             except (ValueError, OSError, KeyError) as e:
@@ -517,6 +720,10 @@ class Handler(BaseHTTPRequestHandler):
             form = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self.send_json({"error": "Bad request"}, HTTPStatus.BAD_REQUEST)
+        if not isinstance(form, dict):
+            return self.send_json({"error": "Bad request"}, HTTPStatus.BAD_REQUEST)
+        if self.path in ("/api/me", "/api/me/delete") or self.path.startswith(("/api/auth/", "/api/connect/")):
+            return self.account_post(form)
         if self.path == "/api/run":
             with JOB_LOCK:
                 if JOB and JOB.running:
@@ -601,6 +808,7 @@ def main(argv=None) -> None:
     p.add_argument("--host", default="127.0.0.1", help="Keep 127.0.0.1 unless you trust your network")
     args = p.parse_args(argv)
     load_env()
+    configure_accounts(args.port)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Clip finder UI running at http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.port}  (Ctrl+C to stop)")
     try:
