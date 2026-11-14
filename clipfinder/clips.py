@@ -24,6 +24,7 @@ class Clip:
     text: str = ""                                 # what's said in the clip
     features: dict = field(default_factory=dict)   # measurements the re-ranker learns from
     predicted: float | None = None                 # re-ranker score, when one is in use
+    music: float = 0.0                             # share of the clip with music (radio) playing
 
     REQUIRED = ("start", "end", "score", "title", "hook", "category", "reason")
 
@@ -34,7 +35,7 @@ class Clip:
     @classmethod
     def from_dict(cls, d: dict) -> "Clip":
         kw = {k: d[k] for k in cls.REQUIRED}
-        kw.update({k: d[k] for k in ("id", "text", "features", "predicted") if k in d})
+        kw.update({k: d[k] for k in ("id", "text", "features", "predicted", "music") if k in d})
         return cls(**kw)
 
 
@@ -136,14 +137,22 @@ def clean_clips(clips: list[Clip], segs: list[Segment], min_len: float,
 def save_manifest(path: Path, clips: list[Clip], **meta) -> None:
     data = {**{k: (str(v) if isinstance(v, Path) else v) for k, v in meta.items()},
             "clips": [asdict(c) for c in clips]}
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    write_json(path, data)
+
+
+def write_json(path: Path, data: dict) -> None:
+    """Write via a temp file so a reader (the web UI, live mode's renderer) never sees
+    half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def update_manifest(path: Path, **fields) -> None:
     """Set top-level fields (e.g. segments) in clips.json, keeping everything else."""
     data = json.loads(path.read_text(encoding="utf-8"))
     data.update(fields)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    write_json(path, data)
 
 
 def load_manifest(path: Path) -> tuple[dict, list[Clip]]:

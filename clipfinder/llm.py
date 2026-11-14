@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -32,26 +33,42 @@ You will get part of a transcript from a GTA 6 stream or gameplay video. Each li
 is "[start-end] text" with times in seconds. Find the moments that would make the \
 best standalone short clips.
 
+About GTA 6 (Grand Theft Auto VI): set in the state of Leonida, centred on Vice City. \
+The two playable leads are Jason and Lucia, a criminal couple, and the player can switch \
+between them. There is an in-game social media feed where clips and posts go viral. \
+Streamers are playing it for the first time, so first impressions and discoveries are \
+content in themselves.
+
 What makes a great GTA clip:
 - Chaos and escalation: police chases, wanted level climbing, explosions, crashes, \
 heists going wrong, getting "wasted" or "busted" at the worst moment.
 - Big streamer reactions: screaming, laughing, disbelief, rage, "NO WAY", "bro what".
+- First-time discoveries: the streamer seeing something in GTA 6 for the first time \
+and reacting to it (a detail, a new mechanic, how real the world or NPCs look).
 - Funny moments: absurd physics, NPC weirdness, failed stunts, banter, roleplay bits.
 - Skill/clutch moments: insane escapes, stunt jumps, perfect getaways.
 - Story/meme moments: shocking plot beats, quotable lines, hot takes about the game.
 
+What travels best is understood in seconds: a short setup, a visible reaction, then \
+the end. How fast a stranger gets it matters more than how big the moment is.
+
 Rules for each clip:
 - It must make sense on its own, with a brief setup and a payoff. Start a few \
 seconds before the action begins; end right after the payoff/reaction lands.
-- Usually 15 to 60 seconds; never under {min_len}s or over {max_len}s (a little \
-padding is added around each clip afterwards, so these limits are for start to end).
+- Usually 15 to 45 seconds; go longer only when the build-up really needs it, but \
+never under {min_len}s or over {max_len}s (a little padding is added around each clip \
+afterwards, so these limits are for start to end).
 - Use the transcript's own timestamps for start and end.
 - Clips must not overlap each other.
 - Score honestly from 1 to 10 for viral potential. Skip dull stretches entirely; \
 returning zero clips for a boring section is fine.
+- Cutscenes: lines from game characters (Jason, Lucia and others) are the game talking, \
+not the streamer. A clip that is mostly cutscene with no streamer reaction is weak \
+(anyone can post it, and it spoils the story). Clip the streamer reacting to it instead.
 - The transcript only captures speech. Infer game action from what the player says \
 (e.g. "they're shooting at me", "five stars!", sudden yelling), and from the audio and \
 chat signals when they are given."""
+
 
 _CLIP_ITEM = {
     "type": "object",
@@ -195,8 +212,20 @@ def section_prompt(chunk: list[Segment], cfg: LLMConfig) -> str:
     return user + "\n\nFind the best clips in this section."
 
 
+# Now and then a text field ends with a scrap of the JSON/markup around it ('...}]}</reaso').
+_TRAILING_JUNK = re.compile(r'(?:\s*"?\s*[}\]][}\]"\\\s]*)?(?:\s*</?\w*>?)?$')
+
+
+def tidy_text(s: str) -> str:
+    out = _TRAILING_JUNK.sub("", s).strip()
+    return out if out else s.strip()
+
+
 def clips_from(data: dict | None) -> list[Clip]:
-    return [Clip.from_dict(c) for c in data["clips"]] if data else []
+    clips = [Clip.from_dict(c) for c in data["clips"]] if data else []
+    for c in clips:
+        c.title, c.hook, c.reason = tidy_text(c.title), tidy_text(c.hook), tidy_text(c.reason)
+    return clips
 
 
 def section_label(i: int, n: int, chunk: list[Segment]) -> str:

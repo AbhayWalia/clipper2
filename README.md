@@ -19,6 +19,7 @@ Use it from the command line (`python clipper.py`) or the web UI (`python ui.py`
    - `mlx-whisper` (Apple Silicon) or `faster-whisper`: transcribe videos with no captions
    - `yt-dlp chat-downloader`: `--url` downloads
    - `panns-inference`: sound detection (see below)
+   - `streamlink`: leaves Twitch ads out of `--live` recordings
 3. Get an API key from https://console.anthropic.com and set it:
    - Mac/Linux: `export ANTHROPIC_API_KEY=sk-ant-...`
    - Windows (PowerShell): `$env:ANTHROPIC_API_KEY="sk-ant-..."`
@@ -30,6 +31,12 @@ Use it from the command line (`python clipper.py`) or the web UI (`python ui.py`
 ```bash
 # Straight from a Twitch VOD or YouTube URL: downloads video, captions and chat
 python clipper.py --url https://www.twitch.tv/videos/123456789 --streamer alice --burn-captions
+
+# Long VOD? Download only the audio, then only the video around each clip (see below)
+python clipper.py --url https://www.twitch.tv/videos/123456789 --audio-first --burn-captions
+
+# Clip a stream while it's live; clips appear a few minutes after each moment (Ctrl+C to stop)
+python clipper.py --live https://www.twitch.tv/alice --vertical --burn-captions
 
 # Basic: find clips and cut them into ./clips
 python clipper.py --video stream.mp4 --transcript stream.srt
@@ -60,11 +67,18 @@ python clipper.py --video stream.mp4 --transcribe --chat chat.json \
 Prefer clicking to flags? Run `python ui.py` from the venv and open http://localhost:8000
 (`--port 9000` for another port). It only listens on your own machine.
 
-- **New run:** start from a Twitch/YouTube link, a video in the project folder, or a saved
-  `clips.json` (re-render with new settings, no AI cost). The main options are switches; the
-  rest (notes for Claude, clip count and length, padding, effort, Batch API, sound detection,
-  output folder) are under More options. The log streams live and a run can be stopped.
-- **Clips:** every output folder gets a tab and every clip a card with its score, category,
+- **New run:** start from a Twitch/YouTube link (with an **Audio first** switch, on by default),
+  a video in the project folder, a channel that's **Live** now, or a saved `clips.json`
+  (**Render** with new settings, no AI cost). The main options are switches; the rest (notes
+  for Claude, clip count and length, padding, effort, Batch API, sound detection, output
+  folder) are under More options. The log streams live and a run can be stopped.
+- **Live:** paste a channel link and press Start live clipping. The run card shows how much of
+  the stream has been checked and how many clips were found and cut; the session's folder gets
+  a red dot, and clips appear in it as they're cut, ready to Keep/Reject while the stream is
+  still on. **Stop & finish** checks the last few minutes and cuts the last clips (press again
+  to force stop). A session that stops without finishing (e.g. the computer slept) is marked
+  so you can cut what's left with Render.
+- **Clips:** every output folder (and each live session in it) gets a tab and every clip a card with its score, category,
   hook, timestamps, real length and why Claude picked it, plus Download and Copy caption.
   Clips listed in `clips.json` but not cut yet get a **Cut them now** button.
 
@@ -74,6 +88,19 @@ It reads `ANTHROPIC_API_KEY` from `.env` or `../.env` if it isn't set.
 - **Review:** on each clip, Keep or Reject it and nudge its start/end by a second. Choices are
   saved in `clips.json` (`review`, plus `original_start`/`original_end` when trimmed). **Render
   approved** cuts only the kept clips at full quality (`--only 2,5,7` on the command line).
+- **Results:** after posting a clip, **Log results** on its card saves its views and average
+  watch time per platform (update them as they grow); the card then shows them. The
+  **Results** button lists every posted clip, best first, imports a CSV of stats, and trains
+  the re-ranker once 30 clips have results. Same `library.json` / `ranker.json` as
+  `python feedback.py` (see [Learning from posted clips](#learning-from-posted-clips)).
+- **Cam layout:** if the streamer cam box is off, **Cam layout** in a folder's toolbar shows a
+  frame from the stream with the box on it: drag or resize it, pick cam on top or bottom and
+  its size, watch the 9:16 preview, then save (as the streamer's layout when the run knows
+  the streamer) and optionally re-render the clips.
+- **Models:** More options picks the Claude model (Sonnet 5.5, or Opus 5.5 at twice the
+  price), an optional Haiku **first pass** (it reads the whole stream; the main model only
+  re-scores its best finds, much cheaper on long streams), and the Whisper model used when a
+  stream has no captions.
 - **Prompt:** the Prompt button edits what Claude looks for. It's saved to `prompt.txt` and
   every new run uses it (`--prompt-file prompt.txt`); Reset goes back to the built-in one.
 - **Cost and time:** every run prints its time per stage and Claude cost, and records them in
@@ -91,10 +118,38 @@ so about a minute per hour of video, cached in `VIDEO.sounds.json`).
 `pip install panns-inference` to turn it on; the ~330 MB model downloads to `~/panns_data` the
 first time. `--no-sound-tags` (or the switch in the web UI) turns it off.
 
-## Per-streamer facecam layouts
+**Music warning.** GTA's radio plays licensed songs: Twitch mutes them in VODs and deletes
+clips with them, and YouTube/TikTok can claim the clip. The sound model also scores music, so
+Claude is told where music plays (and to prefer moments without it), each clip records how
+much of it has music (`"music": 0.6` in `clips.json`), and clips with 25% or more get a
+**♪ Music** badge in the web UI. The model can't tell the radio from the game's own score, so
+treat the badge as "check this before posting". Tested: a radio song mixed under a streamer
+talking is caught at -6 to -18 dB; speech-only stream audio isn't flagged.
 
-Every streamer puts their facecam somewhere different, so each one gets a saved layout
-in `layouts.json`. Boxes are fractions of the frame, so one layout works for any resolution.
+## Streamer cam (facecam) layouts
+
+The Shorts look: the streamer's webcam on top, gameplay below, captions on the seam.
+
+**Automatic:** `--facecam auto` (the **Streamer cam** switch in the web UI, on by default)
+finds the cam for you. A few frames go to Claude, which says whether there's a webcam of
+the streamer and where (one call, under a cent). If there is, clips get the split layout; if
+not, a plain 9:16 crop. The answer is stored in `clips.json`, so re-renders and live clips
+don't ask again, and saved as the streamer's layout in `layouts.json`, so their next streams
+don't either. `--no-facecam` (switch off) leaves the cam out even if a layout is saved.
+Each clip card in the web UI also has a **Streamer cam** button: it turns the cam on or off
+for that clip alone and re-renders it (about 10 seconds). The choice is saved in
+`clips.json` (`"facecam": true/false` on the clip) and beats the run's setting from then on.
+
+```bash
+python clipper.py --url https://www.twitch.tv/videos/123456789 --facecam auto --burn-captions
+```
+
+Works with every source: a video, a URL, `--audio-first` (it looks at the downloaded clip
+sections) and `--live`. If the box is off, fix it in `layouts.json` or set it by hand:
+
+**By hand:** every streamer puts their facecam somewhere different, so each one gets a saved
+layout in `layouts.json`. Boxes are fractions of the frame, so one layout works for any
+resolution.
 
 1. Grab a still with a grid on it (white lines every 0.1 of the frame, yellow every 0.05):
    ```bash
@@ -166,6 +221,69 @@ The stream title becomes `--context` and the channel name becomes `--streamer` (
 layout and the feedback library) unless you give your own. Files already downloaded are reused,
 so re-running on the same URL is cheap. Only clip streams you have permission to use.
 
+### Audio first: skip downloading the whole VOD
+
+Finding clips only needs sound: Whisper, loudness and sound detection all listen, and captions
+and chat come separately. With `--audio-first`, the clipper downloads the audio track
+(roughly 60-70 MB per hour, against several GB of 1080p video), finds the clips from it, and
+then downloads only the video around each clip into `segments/`, 8 sections at a time.
+
+- Sections line up exactly with the audio, so clip times and captions don't drift.
+- `clips.json` records the source URL instead of a video. Re-renders (`--clips-json`, or
+  **Render approved** in the web UI) download only what the chosen clips need. A trim past the
+  downloaded footage fetches just the missing piece. Sections already on disk are reused.
+- Each section has 10 s of extra footage either side (`--segment-pad` to change it).
+- With **Find only** (`--dry-run`), no video is downloaded at all until you render.
+- **When it's slower:** YouTube sends sections at under 2x playback speed (sections run in
+  parallel, so 15 clips take about a minute), while it sends a whole video very fast. For short
+  videos, downloading the whole thing is quicker. For multi-hour streams, audio first wins.
+- It needs the source to stay online until you've rendered. `--grab-frame` needs the whole
+  video, so set up facecam layouts from a normal download.
+
+The web UI's **Link** tab has an **Audio first** switch, on by default.
+
+## Live streams
+
+`--live URL` clips a Twitch, Kick or YouTube stream while it's on:
+
+```bash
+python clipper.py --live https://www.twitch.tv/alice --vertical --burn-captions --whisper-model turbo
+```
+
+- ffmpeg records the stream in 10-second chunks. Every 30 s of new recording is transcribed
+  with Whisper and scanned for loudness spikes and sounds; chat is read live.
+- Every 3 minutes, Claude reads the newest few minutes (with 2 minutes of earlier context) and
+  picks moments. A chat burst, loudness spike or a scream, laugh or explosion triggers a look
+  sooner (at most once a minute).
+- A moment only counts once there's a minute of stream after it, because the reaction is often
+  the best part. So **clips appear about 2-4 minutes after the moment**.
+- Clips are cut in the background, so transcription keeps up. Moments Claude sees twice (each
+  look overlaps the last) are only clipped once.
+- Ctrl+C stops recording, checks the last stretch, and waits for the last cuts. The run also
+  ends by itself when the stream goes offline (or sends no video for 2 minutes), and reconnects
+  if the connection drops.
+
+Each session gets its own folder, `OUT/live_<channel>_<date-time>/`, with clips.json, the
+transcript, the clips, and `chunks/` (the recording). Only the last 15 minutes of chunks are
+kept (each clip's footage is copied to `segments/` first); `--keep-recording` keeps it all.
+The folder shows up in the web UI like any other run, so you can review clips while the
+stream is still on and re-render them with different settings later.
+
+**Cost and limits:** about $0.03 per 7 minutes of stream with Sonnet in testing, so roughly
+$1-2 for a 6-hour stream (`--triage-model claude-haiku-5-5` for less). The whole video is
+recorded as it airs (about 3 GB/hour at 1080p60; `--max-height 720` roughly halves it), and
+the clipper must run for the whole stream. It can't clip what aired before it started.
+Only clip streams you have permission to use.
+
+**Twitch ads:** Twitch inserts ads into the stream for viewers who aren't logged in (about
+90 s when you join, and whenever the streamer runs ads). Recorded as-is, they come out as
+broken video (ffmpeg prints errors like `error while decoding MB`). With
+`pip install streamlink`, live mode records Twitch through streamlink, which leaves the ads
+out; the recording just pauses for them and the clock stays in line with chat. Kick streams
+are recorded through streamlink too (when installed); live chat isn't read for Kick. Without it,
+the ads are recorded and a clip that runs into one shows broken video. The recorder's own
+messages go to `chunks/recording.log`.
+
 ## Transcript formats
 
 - `.srt` / `.vtt` subtitle files (YouTube, Twitch, Premiere, CapCut, etc.). Captions you already
@@ -191,6 +309,8 @@ In the output folder:
 | Option | Default | What it does |
 |---|---|---|
 | `--url` | none | Twitch VOD / YouTube URL: downloads video, captions and chat |
+| `--live` / `--keep-recording` | none / off | Clip a live stream as it happens / keep the whole recording |
+| `--audio-first` | off | With --url, download the audio to find clips, then only the video around each clip |
 | `--no-captions` / `--no-chat` | off | With --url, use Whisper instead of the platform captions / skip chat |
 | `--top` | 15 | Max clips to keep (0 = all) |
 | `--min-score` | 6 | Drop clips the AI scored below this (1–10) |
@@ -208,12 +328,13 @@ In the output folder:
 | `--dry-run` | off | Find clips and save `clips.json` without cutting any video |
 | `--reencode` | off | Re-encode even when a stream copy would do |
 | `--keep-audio` | off | Keep the 16 kHz audio extracted for Whisper |
-| `--save-segments` / `--segment-pad` | off / 30 | Keep the footage around each clip in `segments/` so the VOD can be deleted |
+| `--save-segments` / `--segment-pad` | off / 30 (10 with --audio-first) | Keep the footage around each clip in `segments/` so the VOD can be deleted |
 | `--from-segments` | off | Re-render from saved segments even if the VOD still exists (automatic when it's gone) |
 | `--upload` / `--upload-vod` | off | Upload the run to S3 or R2 (`clips/`, `recipes/`; `vods/` too). See *Running it as a service* |
 | `--fetch RUN` | none | Download a run from the bucket into `clips/RUN/` to re-render it (add `--user` for a user's run) |
 | `--stream` / `--links` | file name + suffix / off | Run name in the bucket; print 7-day download links after `--upload` |
 | `--user USER_ID` | `CLIPPER_USER` | Upload into that user's folder and record the run in Supabase |
+| `--facecam auto` / `--no-facecam` | off | Find the streamer's cam and put it above the gameplay / never add it |
 | `--streamer` / `--layouts` | none / layouts.json | Use a saved facecam layout (see above) |
 | `--burn-captions` | off | Word-by-word captions; the spoken word lights up |
 | `--caption-style` | animated | `plain` shows phrases without the highlight |
@@ -260,7 +381,8 @@ In the output folder:
 
 | Module | What's in it |
 |---|---|
-| `clipfinder/fetch.py` | `--url`: download video, captions and chat |
+| `clipfinder/live.py` | `--live`: recording in chunks, rolling transcription, Claude every few minutes |
+| `clipfinder/fetch.py` | `--url`: download video (or audio first, then clip sections), captions and chat |
 | `clipfinder/transcript.py` | Transcript parsers and chunking |
 | `clipfinder/transcribe.py` | Audio extraction, Whisper, and filtering Whisper's invented filler |
 | `clipfinder/llm.py` | Prompt, Claude calls, batch, refusal fallback, rescoring |
@@ -268,6 +390,7 @@ In the output folder:
 | `clipfinder/render.py` | ffmpeg: stream copy, re-encode, previews |
 | `clipfinder/captions.py` | Word-by-word captions and the hook banner (ASS) |
 | `clipfinder/layout.py` | Per-streamer facecam layouts and the split-screen filter |
+| `clipfinder/facecam.py` | `--facecam auto`: finding the streamer's cam with Claude |
 | `clipfinder/signals.py` | Audio loudness spikes and chat bursts, and the notes Claude sees |
 | `clipfinder/sounds.py` | Sound detection with PANNs (laughter, gunfire, explosions...) |
 | `clipfinder/stats.py` | Run timing, token usage and cost (prices per model live here) |
@@ -447,7 +570,5 @@ short-lived link for its files.
 
 - A benchmark: score the finder against a VOD's most-viewed Twitch community clips, so prompt
   and model changes are measured instead of guessed.
-- Download only what's needed: fetch audio and chat first, then only the clip sections.
 - Send Claude a few frames from each candidate clip when rescoring, to catch visual moments.
 - Detect GTA HUD events (wanted stars, "Wasted") from the video frames.
-- Detect the facecam box automatically (face detection on a few frames) to speed up layout setup.

@@ -13,20 +13,24 @@ import mimetypes
 import os
 import re
 import secrets
+import signal
 import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import accounts
+from . import accounts, results
 from .accounts import AccountError
 from .auth import Auth, AuthError, Session
+from .clips import write_json
 from .db import Database, DatabaseError
+from .layout import Layout, load_layouts, save_layout
 from .render import slugify
 
 ROOT = Path.cwd().resolve()
@@ -36,6 +40,9 @@ VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm"}
 CLIP_NAME = re.compile(r"^(\d+)_.*\.mp4$")
 PROMPT_FILE = ROOT / "prompt.txt"  # the clip-finding prompt, editable from the UI
 RECIPE_LOCK = threading.Lock()
+WHISPER_MODELS = {"small", "turbo", "medium", "large-v3"}
+CLAUDE_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"}  # what the form offers
+LIVE_FRESH = 300  # a live session not heard from for this long has stopped (crashed or killed)
 
 # Accounts (Supabase Auth). Set up by configure_accounts(); None means not configured.
 AUTH: Auth | None = None
@@ -80,13 +87,16 @@ def redirect_uri(provider: str) -> str:
 class Job:
     def __init__(self, cmd: list[str], out: str):
         self.cmd, self.out = cmd, out
+        self.live = "--live" in cmd
+        self.stopping = False
         self.lines: list[str] = []
         self.started = time.time()
         self.ended: float | None = None
         self.code: int | None = None
+        # Its own process group, so a force stop also ends what it started (ffmpeg).
         self.proc = subprocess.Popen(
             cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            bufsize=1, env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            bufsize=1, env={**os.environ, "PYTHONUNBUFFERED": "1"}, start_new_session=True)
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
@@ -100,8 +110,23 @@ class Job:
     def running(self) -> bool:
         return self.code is None
 
+    def stop(self) -> None:
+        """First press: Ctrl+C, so a run (a live session especially) wraps up properly.
+        Second press: stop it outright."""
+        if not self.running:
+            return
+        if self.stopping:
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, AttributeError):
+                self.proc.terminate()
+        else:
+            self.stopping = True
+            self.proc.send_signal(signal.SIGINT)
+
     def state(self, since: int = 0) -> dict:
         return {"running": self.running, "code": self.code, "out": self.out,
+                "live": self.live, "stopping": self.stopping,
                 "cmd": " ".join(self.cmd[1:]), "started": self.started, "ended": self.ended,
                 "lines": self.lines[since:], "total": len(self.lines)}
 
@@ -122,6 +147,8 @@ def build_command(f: dict) -> tuple[list[str], str]:
         if not text("url"):
             raise ValueError("Paste a Twitch or YouTube link.")
         args += ["--url", text("url")]
+        if f.get("audio_first") is True:
+            args.append("--audio-first")
     elif source == "video":
         if not text("video"):
             raise ValueError("Pick a video file.")
@@ -130,6 +157,12 @@ def build_command(f: dict) -> tuple[list[str], str]:
             args += ["--transcript", text("transcript")]
         else:
             args.append("--transcribe")
+    elif source == "live":
+        if not text("live_url"):
+            raise ValueError("Paste the link of a channel that's live now.")
+        args += ["--live", text("live_url")]
+        if f.get("keep_recording") is True:
+            args.append("--keep-recording")
     elif source == "rerender":
         if not text("clips_json"):
             raise ValueError("Pick a clips.json to re-render.")
@@ -139,6 +172,16 @@ def build_command(f: dict) -> tuple[list[str], str]:
     else:
         raise ValueError("Choose a source.")
 
+    if source != "rerender":
+        if text("whisper_model"):  # used when there are no captions to borrow
+            if text("whisper_model") not in WHISPER_MODELS:
+                raise ValueError("Unknown Whisper model.")
+            args += ["--whisper-model", text("whisper_model")]
+        for key, flag in (("model", "--model"), ("first_pass", "--triage-model")):
+            if text(key):
+                if text(key) not in CLAUDE_MODELS:
+                    raise ValueError("Unknown Claude model.")
+                args += [flag, text(key)]
     for key, flag in (("streamer", "--streamer"), ("context", "--context"),
                       ("effort", "--effort"), ("chat", "--chat")):
         if text(key):
@@ -159,10 +202,14 @@ def build_command(f: dict) -> tuple[list[str], str]:
     for key, flag in (("vertical", "--vertical"), ("burn_captions", "--burn-captions"),
                       ("hook_overlay", "--hook-overlay"), ("preview", "--preview"),
                       ("dry_run", "--dry-run"), ("batch", "--batch")):
-        if f.get(key) is True:
+        if f.get(key) is True and not (source == "live" and key == "batch"):
             args.append(flag)
     if f.get("sound_tags") is False:
         args.append("--no-sound-tags")
+    if f.get("facecam") is True:
+        args += ["--facecam", "auto"]
+    elif f.get("facecam") is False:
+        args.append("--no-facecam")
     return [sys.executable, str(CLIPPER), *args], out
 
 
@@ -175,8 +222,9 @@ def safe_path(rel: str) -> Path | None:
     return p if p.is_relative_to(ROOT) else None
 
 
-def folder_clips(folder: Path) -> list[dict]:
-    """Clips in a folder (and its previews/), matched to clips.json by their number."""
+def folder_clips(folder: Path, lib: dict | None = None) -> list[dict]:
+    """Clips in a folder (and its previews/), matched to clips.json by their number.
+    lib: the feedback library, to show how posted clips did."""
     meta: dict = {}
     recipe = folder / "clips.json"
     if recipe.is_file():
@@ -204,10 +252,13 @@ def folder_clips(folder: Path) -> list[dict]:
             out.append({
                 "n": i, "file": mp4.relative_to(ROOT).as_posix(), "title": title,
                 "preview": sub.name == "previews", "size": mp4.stat().st_size,
+                "mtime": int(mp4.stat().st_mtime),  # changes when it's re-rendered
                 "score": c.get("score"), "hook": c.get("hook"), "category": c.get("category"),
                 "reason": c.get("reason"), "start": c.get("start"), "end": c.get("end"),
                 "srt": mp4.with_suffix(".srt").is_file(), "matched": bool(c),
-                "review": c.get("review"),
+                "review": c.get("review"), "facecam": c.get("facecam"), "music": c.get("music") or 0,
+                "has_id": bool(c.get("id")),
+                "results": results.clip_stats(lib, c, meta.get("video")) if (lib and c) else None,
                 # Trimmed after this video was made: it no longer matches the new edges.
                 "stale": bool(c.get("edited_at")) and c["edited_at"] > mp4.stat().st_mtime,
             })
@@ -224,23 +275,76 @@ def uncut(folder: Path) -> int:
                for i, c in enumerate(info, 1))
 
 
-def library() -> list[dict]:
-    folders = []
+def run_folders() -> list[Path]:
+    """Folders in the project with clips in them, plus run folders one level down
+    (live sessions are saved as OUT/live_<channel>_<date>/)."""
+    out = []
     for d in sorted(ROOT.iterdir()):
         if not d.is_dir() or d.name.startswith("."):
             continue
-        clips = folder_clips(d)
+        out.append(d)
+        out += [s for s in sorted(d.iterdir())
+                if s.is_dir() and not s.name.startswith(".") and (s / "clips.json").is_file()]
+    return out
+
+
+def live_state(meta: dict) -> dict | None:
+    live = meta.get("live")
+    if not isinstance(live, dict):
+        return None
+    try:
+        age = time.time() - datetime.fromisoformat(live["updated"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        age = float("inf")
+    active = live.get("status") in ("starting", "recording", "finishing") and age < LIVE_FRESH
+    return {"source": live.get("source"), "status": live.get("status"), "active": active,
+            "analysed": live.get("analysed"), "age": round(age) if age != float("inf") else None}
+
+
+def folder_layout(meta: dict) -> dict | None:
+    """The cam layout clips in this folder are cut with: the streamer's saved one (it wins
+    in the clipper too), else the one found for this video."""
+    streamer = meta.get("streamer")
+    if streamer:
+        try:
+            saved = load_layouts(ROOT / "layouts.json").get(streamer)
+        except (OSError, ValueError, TypeError):
+            saved = None
+        if saved:
+            return {"facecam": list(saved.facecam), "cam_height": saved.cam_height,
+                    "cam_position": saved.cam_position, "from": "streamer"}
+    lay = meta.get("layout")
+    if isinstance(lay, dict) and lay.get("facecam"):
+        return {"facecam": lay["facecam"], "cam_height": lay.get("cam_height", 0.35),
+                "cam_position": lay.get("cam_position", "top"), "from": "video"}
+    return None
+
+
+def library() -> list[dict]:
+    folders = []
+    lib = results.fb.load_library(results.library_path(ROOT))
+    for d in run_folders():
+        clips = folder_clips(d, lib)
         recipe = d / "clips.json"
         if not clips and not recipe.is_file():
             continue
-        runs = []
+        meta = {}
         if recipe.is_file():
             try:
-                runs = json.loads(recipe.read_text(encoding="utf-8")).get("runs") or []
+                meta = json.loads(recipe.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 pass
+        runs = meta.get("runs") or []
         costs = [r["cost_usd"] for r in runs if r.get("cost_usd") is not None]
-        folders.append({"name": d.name, "clips": clips, "uncut": uncut(d) if recipe.is_file() else 0,
+        lay = meta.get("layout")
+        folders.append({"name": d.relative_to(ROOT).as_posix(), "label": d.name,
+                        # streamer cam: True found, False looked and there isn't one, None not looked
+                        "cam": (bool(lay.get("facecam")) if isinstance(lay, dict) else None),
+                        "layout": folder_layout(meta), "streamer": meta.get("streamer"),
+                        "live": live_state(meta),
+                        "source_url": meta.get("source_url") if not meta.get("video") else None,
+                        "sections": len(meta.get("segments") or []),
+                        "clips": clips, "uncut": uncut(d) if recipe.is_file() else 0,
                         "approved": sorted(c["n"] for c in clips if c["review"] == "approved"),
                         "rejected": sum(c["review"] == "rejected" for c in clips),
                         "cost": round(sum(costs), 4) if costs else None,
@@ -271,6 +375,14 @@ def update_clip(form: dict) -> dict:
                 c["review"] = form["review"]
             else:
                 c.pop("review", None)
+        if "facecam" in form:  # this clip with or without the streamer's cam
+            if form["facecam"] not in (True, False, None):
+                raise ValueError("Bad facecam value.")
+            if form["facecam"] is None:
+                c.pop("facecam", None)
+            else:
+                c["facecam"] = form["facecam"]
+            c["edited_at"] = time.time()  # its video no longer matches until it's re-rendered
         for key in ("start", "end"):
             delta = form.get(f"nudge_{key}")
             if delta is None:
@@ -284,8 +396,59 @@ def update_clip(form: dict) -> dict:
                 raise ValueError("A clip must stay at least 1 second long.")
             c[key] = new
             c["edited_at"] = time.time()
-        recipe.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    return {"start": c["start"], "end": c["end"], "review": c.get("review")}
+        write_json(recipe, data)
+    return {"start": c["start"], "end": c["end"], "review": c.get("review"),
+            "facecam": c.get("facecam")}
+
+
+def recipe_path(rel) -> Path:
+    recipe = safe_path(str(rel or ""))
+    if not recipe or recipe.name != "clips.json" or not recipe.is_file():
+        raise ValueError("Clip list not found.")
+    return recipe
+
+
+def frame_for(recipe: Path) -> bytes:
+    """A still of the source (full frame), for drawing the cam box on: from the VOD if it's
+    still there, else from a saved clip segment (audio-first and live runs)."""
+    meta = json.loads(recipe.read_text(encoding="utf-8"))
+    video, segs = meta.get("video"), meta.get("segments") or []
+    if video and Path(video).is_file():
+        clips = meta.get("clips") or []
+        src, t = Path(video), (clips[0]["start"] + 5 if clips else 60.0)
+    elif segs and (recipe.parent / segs[0]["file"]).is_file():
+        src, t = recipe.parent / segs[0]["file"], (segs[0]["end"] - segs[0]["start"]) / 2
+    else:
+        raise ValueError("There's no video left to take a frame from (the source and clip "
+                         "segments are gone).")
+    out = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(src),
+                          "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "3", "-f", "mjpeg", "-"],
+                         capture_output=True)
+    if out.returncode or not out.stdout:
+        raise ValueError("Couldn't read a frame from the video.")
+    return out.stdout
+
+
+def save_folder_layout(form: dict) -> dict:
+    """Cam box drawn in the UI: saved for this video, and as the streamer's layout (which
+    the clipper prefers) when the run knows the streamer."""
+    recipe = recipe_path(form.get("recipe"))
+    box = form.get("facecam")
+    if not (isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)):
+        raise ValueError("Draw the cam box first.")
+    layout = Layout(facecam=tuple(float(v) for v in box),
+                    cam_height=float(form.get("cam_height") or 0.35),
+                    cam_position=str(form.get("cam_position") or "top"))
+    stored = {"facecam": list(layout.facecam), "gameplay": list(layout.gameplay),
+              "cam_height": layout.cam_height, "cam_position": layout.cam_position}
+    with RECIPE_LOCK:
+        data = json.loads(recipe.read_text(encoding="utf-8"))
+        data["layout"] = stored
+        write_json(recipe, data)
+    streamer = data.get("streamer")
+    if streamer:
+        save_layout(ROOT / "layouts.json", streamer, layout)
+    return {**stored, "streamer": streamer}
 
 
 def get_prompt() -> dict:
@@ -527,6 +690,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(inputs())
         if url.path == "/api/prompt":
             return self.send_json(get_prompt())
+        if url.path == "/api/results":
+            return self.send_json(results.summary(ROOT))
+        if url.path == "/api/frame":
+            try:
+                data = frame_for(recipe_path((parse_qs(url.query).get("recipe") or [""])[0]))
+            except (ValueError, OSError, KeyError) as e:
+                return self.send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if url.path == "/api/job":
             since = int((url.query.partition("since=")[2] or "0").split("&")[0] or 0)
             return self.send_json(JOB.state(since) if JOB else None)
@@ -545,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "Bad request"}, HTTPStatus.BAD_REQUEST)
         if not isinstance(form, dict):
             return self.send_json({"error": "Bad request"}, HTTPStatus.BAD_REQUEST)
-        if self.path.startswith(("/api/auth/", "/api/me", "/api/connect/")):
+        if self.path in ("/api/me", "/api/me/delete") or self.path.startswith(("/api/auth/", "/api/connect/")):
             return self.account_post(form)
         if self.path == "/api/run":
             with JOB_LOCK:
@@ -558,15 +735,29 @@ class Handler(BaseHTTPRequestHandler):
                                           HTTPStatus.BAD_REQUEST)
                 JOB = Job(cmd, out)
             return self.send_json(JOB.state())
+        actions = {
+            "/api/layout": lambda: save_folder_layout(form),
+            "/api/results": lambda: results.record(ROOT, recipe_path(form.get("recipe")),
+                                                   form.get("n"), form),
+            "/api/results/import": lambda: results.import_csv(
+                ROOT, str(form.get("csv") or ""), str(form.get("platform") or "tiktok"),
+                [d / "clips.json" for d in run_folders() if (d / "clips.json").is_file()]),
+            "/api/results/train": lambda: results.train(ROOT),
+        }
+        if self.path in actions:
+            try:
+                return self.send_json(actions[self.path]())
+            except (ValueError, TypeError, KeyError) as e:
+                return self.send_json({"error": str(e) or "Bad request"}, HTTPStatus.BAD_REQUEST)
         if self.path in ("/api/clip", "/api/prompt"):
             try:
                 return self.send_json(update_clip(form) if self.path == "/api/clip" else save_prompt(form))
             except (ValueError, TypeError, KeyError) as e:
                 return self.send_json({"error": str(e) or "Bad request"}, HTTPStatus.BAD_REQUEST)
         if self.path == "/api/stop":
-            if JOB and JOB.running:
-                JOB.proc.terminate()
-            return self.send_json({"ok": True})
+            if JOB:
+                JOB.stop()
+            return self.send_json(JOB.state(len(JOB.lines)) if JOB else {"ok": True})
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def send_file(self, path: Path, download: bool = False) -> None:
